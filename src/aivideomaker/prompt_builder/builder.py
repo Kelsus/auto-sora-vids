@@ -24,6 +24,7 @@ class PromptBuilder:
                     transcript=chunk.transcript,
                     visual_prompt=visual_prompt,
                     audio_prompt=audio_prompt,
+                    duration_sec=chunk.estimated_duration_sec,
                     cameo_voice=VoiceDirective(voice_id=self.default_voice),
                 )
             )

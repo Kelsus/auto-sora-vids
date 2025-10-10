@@ -36,6 +36,11 @@ src/aivideomaker/
    ```
    You can also create a `.env` file with this key; the CLI loads it automatically.
 
+   To hit the real Sora API, add an OpenAI key with Sora 2 access:
+   ```bash
+   export OPENAI_API_KEY="sk-openai-..."
+   ```
+
 3. **Run the pipeline (dry-run by default):**
    ```bash
    aivideo "https://example.com/news/article"
@@ -48,9 +53,15 @@ src/aivideomaker/
    ```
    That variant stops after prompt generation and simply writes the JSON bundle for inspection.
 
+   Once satisfied with the prompts, you can render them later from the saved JSON bundle:
+   ```bash
+   aivideo --prompt-bundle data/scripts/example-article.json --dry-run   # placeholder artifacts
+   aivideo --prompt-bundle data/scripts/example-article.json              # contacts Sora if enabled
+   ```
+
 4. **Enable real integrations** (future work):
    - Add alternate LLM backends (e.g., OpenAI) or multi-pass planning prompts if needed.
-   - Implement Sora 2 API submission inside `media_pipeline/sora_client.py`.
+   - Tune Sora 2 render parameters (seconds, size, batching) for production workflows.
    - Integrate cameo voice or ElevenLabs within `media_pipeline/voice.py`.
    - Replace the dry-run guard in `orchestrator.PipelineOrchestrator.run` with actual stitching logic once clips exist.
 
@@ -60,16 +71,21 @@ You can supply a JSON or YAML config to override the data root, voice, or Claude
 {
   "data_root": "./data",
   "voice_id": "cameo_investigator",
-  "use_real_sora": false,
+  "use_real_sora": true,
+  "sora_model": "sora-2",
+  "sora_size": "1280x720",
   "llm_provider": "claude",
   "llm_model": "claude-sonnet-4-5",
-  "anthropic_api_key_env": "ANTHROPIC_API_KEY"
+  "anthropic_api_key_env": "ANTHROPIC_API_KEY",
+  "sora_api_key_env": "OPENAI_API_KEY"
 }
 ```
 Run with:
 ```bash
 aivideo <url> --config config.json
 ```
+
+For a two-step workflow, run once with `--prompts-only`, review the JSON bundle, then replay it with `--prompt-bundle` when you are ready to call Sora.
 
 ## Roadmap Ideas
 - Automated polling of RSS/Atom feeds for trending stories.
@@ -79,4 +95,5 @@ aivideo <url> --config config.json
 
 ## Troubleshooting
 - `Missing Anthropics API key`: export `ANTHROPIC_API_KEY` or place it in a `.env` file before running the CLI.
+- `Missing Sora API key`: export `OPENAI_API_KEY` (or update `sora_api_key_env`) before running without `--dry-run` when `use_real_sora` is `true`.
 - New Claude model version? Adjust `llm_model` in your config JSON.

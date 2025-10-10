@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class VoiceDirective(BaseModel):
@@ -16,6 +16,7 @@ class SoraPrompt(BaseModel):
     transcript: str
     visual_prompt: str
     audio_prompt: str
+    duration_sec: float = Field(default=10.0)
     cameo_voice: Optional[VoiceDirective] = None
 
 

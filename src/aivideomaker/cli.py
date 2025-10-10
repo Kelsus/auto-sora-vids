@@ -6,14 +6,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .orchestrator import PipelineOrchestrator
+from .orchestrator import PipelineBundle, PipelineOrchestrator
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate suspenseful video prompts from a news article URL."
     )
-    parser.add_argument("url", help="URL of the news article to process")
+    parser.add_argument("url", nargs="?", help="URL of the news article to process")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -35,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Stop after generating prompts and write them to disk without preparing voice assets or contacting Sora",
     )
+    parser.add_argument(
+        "--prompt-bundle",
+        type=Path,
+        help="Path to a previously generated bundle JSON to execute against Sora",
+    )
     return parser
 
 
@@ -48,12 +53,25 @@ def main() -> None:
         if args.config
         else PipelineOrchestrator.default()
     )
-    bundle = orchestrator.run(
-        article_url=args.url,
-        output_dir=args.output_dir,
-        dry_run=args.dry_run,
-        prompts_only=args.prompts_only,
-    )
+
+    if args.prompt_bundle:
+        payload = json.loads(args.prompt_bundle.read_text(encoding="utf-8"))
+        bundle = PipelineBundle.model_validate(payload)
+        bundle = orchestrator.execute_prompts(
+            bundle=bundle,
+            output_dir=args.output_dir,
+            dry_run=args.dry_run,
+            prompts_only=args.prompts_only,
+        )
+    else:
+        if not args.url:
+            parser.error("Either a URL or --prompt-bundle must be provided")
+        bundle = orchestrator.run(
+            article_url=args.url,
+            output_dir=args.output_dir,
+            dry_run=args.dry_run,
+            prompts_only=args.prompts_only,
+        )
 
     output_path = args.output_dir / f"{bundle.article.slug}.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)

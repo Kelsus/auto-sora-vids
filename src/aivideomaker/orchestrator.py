@@ -32,6 +32,12 @@ class PipelineConfig(BaseModel):
     llm_provider: str = "claude"
     llm_model: str = "claude-sonnet-4-5"
     anthropic_api_key_env: str = "ANTHROPIC_API_KEY"
+    sora_model: str = "sora-2"
+    sora_size: str = "1280x720"
+    sora_api_key_env: str = "OPENAI_API_KEY"
+    sora_poll_interval: float = 10.0
+    sora_request_timeout: float = 30.0
+    sora_max_wait: float = 600.0
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineConfig":
@@ -99,7 +105,15 @@ class PipelineOrchestrator:
             script_engine=ScriptEngine(llm=config.build_llm()),
             chunk_planner=ChunkPlanner(),
             prompt_builder=PromptBuilder(default_voice=config.voice_id),
-            sora_client=SoraClient(asset_dir=data_root / "media/sora_clips"),
+            sora_client=SoraClient(
+                asset_dir=data_root / "media/sora_clips",
+                api_key=os.getenv(config.sora_api_key_env),
+                model=config.sora_model,
+                size=config.sora_size,
+                poll_interval=config.sora_poll_interval,
+                request_timeout=config.sora_request_timeout,
+                max_wait=config.sora_max_wait,
+            ),
             voice_manager=VoiceSessionManager(base_dir=data_root / "media/voice"),
             stitcher=Stitcher(export_dir=data_root / "exports"),
         )
@@ -123,7 +137,33 @@ class PipelineOrchestrator:
         logger.info("Building structured prompts")
         prompts = self.prompt_builder.build(article, script, chunks)
 
-        voice_asset = None
+        base_bundle = PipelineBundle(
+            article=article,
+            script=script,
+            chunks=chunks,
+            prompts=prompts,
+            sora_assets=[],
+            voice_transcript=None,
+            final_video=None,
+        )
+        return self.execute_prompts(
+            bundle=base_bundle,
+            output_dir=output_dir,
+            dry_run=dry_run,
+            prompts_only=prompts_only,
+        )
+
+    def execute_prompts(
+        self,
+        bundle: PipelineBundle,
+        output_dir: Path,
+        dry_run: bool = True,
+        prompts_only: bool = False,
+    ) -> PipelineBundle:
+        prompts = bundle.prompts
+        chunks = bundle.chunks
+
+        voice_asset = bundle.voice_transcript
         if prompts_only:
             logger.info("Prompts-only mode: skipping voice preparation")
         else:
@@ -140,23 +180,27 @@ class PipelineOrchestrator:
             logger.info("Prompts-only mode: skipping Sora submission")
             sora_assets: list[Path] = []
         else:
-            logger.info("Submitting prompts to Sora (dry_run=%s)", dry_run)
-            sora_assets = self.sora_client.submit_prompts(prompts.sora_prompts, dry_run=dry_run)
+            real_sora = self.config.use_real_sora and not dry_run
+            if real_sora and not self.sora_client.api_key:
+                raise RuntimeError(
+                    f"Missing Sora API key. Set {self.config.sora_api_key_env} in your environment."
+                )
+            submit_dry_run = not real_sora
+            logger.info("Submitting prompts to Sora (dry_run=%s)", submit_dry_run)
+            sora_assets = self.sora_client.submit_prompts(prompts.sora_prompts, dry_run=submit_dry_run)
 
-        final_video = None
-        if not prompts_only and not dry_run and sora_assets:
+        final_video = bundle.final_video
+        if not prompts_only and not dry_run and self.config.use_real_sora and sora_assets:
             final_video = self.stitcher.stitch(sora_assets, voice_asset)
         else:
             reason = "prompts-only mode" if prompts_only else "dry run or no assets"
             logger.info("Skipping stitching (%s)", reason)
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        return PipelineBundle(
-            article=article,
-            script=script,
-            chunks=chunks,
-            prompts=prompts,
-            sora_assets=sora_assets,
-            voice_transcript=voice_asset,
-            final_video=final_video,
+        return bundle.model_copy(
+            update={
+                "sora_assets": sora_assets,
+                "voice_transcript": voice_asset,
+                "final_video": final_video,
+            }
         )
