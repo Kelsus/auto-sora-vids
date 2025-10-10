@@ -30,7 +30,7 @@ class PipelineConfig(BaseModel):
     voice_id: str = "cameo_default"
     use_real_sora: bool = False
     llm_provider: str = "claude"
-    llm_model: str = "claude-3-5-sonnet-20240620"
+    llm_model: str = "claude-sonnet-4-5"
     anthropic_api_key_env: str = "ANTHROPIC_API_KEY"
 
     @classmethod
@@ -104,7 +104,13 @@ class PipelineOrchestrator:
             stitcher=Stitcher(export_dir=data_root / "exports"),
         )
 
-    def run(self, article_url: str, output_dir: Path, dry_run: bool = True) -> PipelineBundle:
+    def run(
+        self,
+        article_url: str,
+        output_dir: Path,
+        dry_run: bool = True,
+        prompts_only: bool = False,
+    ) -> PipelineBundle:
         logger.info("Ingesting article: %s", article_url)
         article = self.article_ingestor.ingest(article_url)
 
@@ -117,24 +123,32 @@ class PipelineOrchestrator:
         logger.info("Building structured prompts")
         prompts = self.prompt_builder.build(article, script, chunks)
 
-        logger.info("Ensuring voice consistency")
         voice_asset = None
-        if prompts.sora_prompts:
-            directive = prompts.sora_prompts[0].cameo_voice
-            if directive:
-                voice_text = "\n\n".join(chunk.transcript for chunk in chunks.chunks)
-                voice_asset = self.voice_manager.prepare_voice(directive, voice_text, dry_run=dry_run)
-            else:
-                logger.warning("No voice directive supplied; skipping voice preparation")
+        if prompts_only:
+            logger.info("Prompts-only mode: skipping voice preparation")
+        else:
+            logger.info("Ensuring voice consistency")
+            if prompts.sora_prompts:
+                directive = prompts.sora_prompts[0].cameo_voice
+                if directive:
+                    voice_text = "\n\n".join(chunk.transcript for chunk in chunks.chunks)
+                    voice_asset = self.voice_manager.prepare_voice(directive, voice_text, dry_run=dry_run)
+                else:
+                    logger.warning("No voice directive supplied; skipping voice preparation")
 
-        logger.info("Submitting prompts to Sora (dry_run=%s)", dry_run)
-        sora_assets = self.sora_client.submit_prompts(prompts.sora_prompts, dry_run=dry_run)
+        if prompts_only:
+            logger.info("Prompts-only mode: skipping Sora submission")
+            sora_assets: list[Path] = []
+        else:
+            logger.info("Submitting prompts to Sora (dry_run=%s)", dry_run)
+            sora_assets = self.sora_client.submit_prompts(prompts.sora_prompts, dry_run=dry_run)
 
         final_video = None
-        if not dry_run and sora_assets:
+        if not prompts_only and not dry_run and sora_assets:
             final_video = self.stitcher.stitch(sora_assets, voice_asset)
         else:
-            logger.info("Skipping stitching (dry run or no assets)")
+            reason = "prompts-only mode" if prompts_only else "dry run or no assets"
+            logger.info("Skipping stitching (%s)", reason)
 
         output_dir.mkdir(parents=True, exist_ok=True)
         return PipelineBundle(

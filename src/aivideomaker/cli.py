@@ -30,6 +30,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip media generation and only emit planning artifacts",
     )
+    parser.add_argument(
+        "--prompts-only",
+        action="store_true",
+        help="Stop after generating prompts and write them to disk without preparing voice assets or contacting Sora",
+    )
     return parser
 
 
@@ -38,16 +43,22 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    orchestrator = PipelineOrchestrator.from_file(args.config) if args.config else PipelineOrchestrator()
+    orchestrator = (
+        PipelineOrchestrator.from_file(args.config)
+        if args.config
+        else PipelineOrchestrator.default()
+    )
     bundle = orchestrator.run(
         article_url=args.url,
         output_dir=args.output_dir,
         dry_run=args.dry_run,
+        prompts_only=args.prompts_only,
     )
 
     output_path = args.output_dir / f"{bundle.article.slug}.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(bundle.model_dump(), indent=2), encoding="utf-8")
+    payload = bundle.model_dump(mode="json")
+    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"Wrote prompt bundle to {output_path}")
 
 

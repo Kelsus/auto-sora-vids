@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import json
+import logging
 from typing import Any, Iterable
 
 from anthropic import Anthropic
@@ -45,6 +46,9 @@ class OpenAILLM(LLMClient):
         return response.choices[0].message.content  # type: ignore[index]
 
 
+logger = logging.getLogger(__name__)
+
+
 class ClaudeLLM(LLMClient):
     """Claude Sonnet 4.5 wrapper using the Anthropics Messages API."""
 
@@ -53,7 +57,7 @@ class ClaudeLLM(LLMClient):
         client: Anthropic,
         model: str,
         system_prompt: str | None = None,
-        max_output_tokens: int = 2000,
+        max_tokens: int = 4096,
         temperature: float = 0.2,
     ) -> None:
         self.client = client
@@ -62,14 +66,16 @@ class ClaudeLLM(LLMClient):
             "You are an investigative video writer. You craft suspenseful but factual narratives, "
             "introducing controversy early, delaying context responsibly, and returning structured JSON responses."
         )
-        self.max_output_tokens = max_output_tokens
+        self.max_tokens = max_tokens
         self.temperature = temperature
 
     def complete(self, prompt: str, **kwargs: Any) -> str:
         params: dict[str, Any] = {
             "model": self.model,
             "system": kwargs.pop("system", self.system_prompt),
-            "max_output_tokens": kwargs.pop("max_output_tokens", self.max_output_tokens),
+            "max_tokens": kwargs.pop(
+                "max_tokens", kwargs.pop("max_output_tokens", self.max_tokens)
+            ),
             "temperature": kwargs.pop("temperature", self.temperature),
             "messages": [
                 {
@@ -85,6 +91,12 @@ class ClaudeLLM(LLMClient):
         }
         params.update(kwargs)
         response = self.client.messages.create(**params)
+        stop_reason = getattr(response, "stop_reason", None)
+        if stop_reason == "max_tokens":
+            logger.warning(
+                "Claude response truncated by max_tokens; consider increasing limit (current=%s)",
+                params.get("max_tokens"),
+            )
         return _collect_text(response.content)
 
 

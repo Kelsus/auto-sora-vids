@@ -32,6 +32,7 @@ SCRIPT_PLANNING_PROMPT = dedent(
           "purpose": string,
           "transcript": string,
           "suspense_level": integer (1-5),
+          "estimated_duration_sec": number,
           "visual_seed": string,
           "audio_mood": string
         }}

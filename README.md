@@ -42,6 +42,12 @@ src/aivideomaker/
    ```
    The command writes a JSON bundle into `data/scripts/<slug>.json`, creates placeholder Sora assets under `data/media/sora_clips/`, and stores a combined narration transcript in `data/media/voice/`.
 
+   To review prompts without touching Sora or generating transcripts, add `--prompts-only`:
+   ```bash
+   aivideo "https://example.com/news/article" --prompts-only
+   ```
+   That variant stops after prompt generation and simply writes the JSON bundle for inspection.
+
 4. **Enable real integrations** (future work):
    - Add alternate LLM backends (e.g., OpenAI) or multi-pass planning prompts if needed.
    - Implement Sora 2 API submission inside `media_pipeline/sora_client.py`.
@@ -56,7 +62,7 @@ You can supply a JSON or YAML config to override the data root, voice, or Claude
   "voice_id": "cameo_investigator",
   "use_real_sora": false,
   "llm_provider": "claude",
-  "llm_model": "claude-3-5-sonnet-20240620",
+  "llm_model": "claude-sonnet-4-5",
   "anthropic_api_key_env": "ANTHROPIC_API_KEY"
 }
 ```

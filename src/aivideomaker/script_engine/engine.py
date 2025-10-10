@@ -23,8 +23,9 @@ class ScriptEngine:
         prompt = render_planning_prompt(article)
         raw = self.llm.complete(prompt)
         logger.debug("LLM raw response: %s", raw)
+        cleaned = _extract_json_block(raw)
         try:
-            payload: dict[str, Any] = json.loads(raw)
+            payload: dict[str, Any] = json.loads(cleaned)
         except json.JSONDecodeError as exc:
             logger.error("Failed to parse LLM JSON: %s", exc)
             raise
@@ -33,3 +34,16 @@ class ScriptEngine:
         except ValidationError as exc:
             logger.error("Invalid script plan payload: %s", exc)
             raise
+
+
+def _extract_json_block(text: str) -> str:
+    candidate = text.strip()
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```"):
+            candidate = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start != -1 and end != -1 and end >= start:
+        return candidate[start : end + 1]
+    return candidate

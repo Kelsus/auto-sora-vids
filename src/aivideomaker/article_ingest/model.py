@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, HttpUrl, field_validator
+from pydantic import BaseModel, HttpUrl, ValidationInfo, field_validator
 
 
 def slugify(text: str) -> str:
@@ -21,13 +21,14 @@ class ArticleMetadata(BaseModel):
 
     @field_validator("slug", mode="before")
     @classmethod
-    def derive_slug(cls, value: Optional[str], values: dict[str, object]) -> str:
+    def derive_slug(cls, value: Optional[str], info: ValidationInfo) -> str:
         if isinstance(value, str) and value:
             return slugify(value)
-        title = values.get("title")
+        data = info.data or {}
+        title = data.get("title")
         if isinstance(title, str) and title:
             return slugify(title)
-        url = values.get("url")
+        url = data.get("url")
         if url:
             return slugify(str(url))
         raise ValueError("Cannot derive slug without title or url")
