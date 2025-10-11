@@ -19,6 +19,7 @@ from aivideomaker.script_engine.engine import ScriptEngine
 from aivideomaker.script_engine.llm import ClaudeLLM, EchoLLM, LLMClient
 from aivideomaker.script_engine.model import ScriptPlan
 from aivideomaker.media_pipeline.sora_client import SoraClient
+from aivideomaker.media_pipeline.veo_client import VeoClient
 from aivideomaker.media_pipeline.voice import VoiceSessionManager
 from aivideomaker.stitcher.assembler import Stitcher
 
@@ -27,17 +28,28 @@ logger = logging.getLogger(__name__)
 
 class PipelineConfig(BaseModel):
     data_root: Path = Path("data")
-    voice_id: str = "cameo_default"
-    use_real_sora: bool = False
+    voice_id: Optional[str] = None
     llm_provider: str = "claude"
     llm_model: str = "claude-sonnet-4-5"
     anthropic_api_key_env: str = "ANTHROPIC_API_KEY"
+    media_provider: str = "veo"
+    negative_prompt: Optional[str] = None
+    # Sora configuration
+    use_real_sora: bool = False
     sora_model: str = "sora-2"
     sora_size: str = "1280x720"
     sora_api_key_env: str = "OPENAI_API_KEY"
     sora_poll_interval: float = 10.0
     sora_request_timeout: float = 30.0
     sora_max_wait: float = 600.0
+    # Veo configuration
+    veo_model: str = "veo-3.0-generate-001"
+    veo_api_key_env: str = "GOOGLE_API_KEY"
+    veo_aspect_ratio: str = "16:9"
+    veo_poll_interval: float = 10.0
+    veo_max_wait: float = 600.0
+    veo_max_concurrent_requests: int = 2
+    veo_submit_cooldown: float = 0.0
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineConfig":
@@ -86,7 +98,7 @@ class PipelineOrchestrator:
     script_engine: ScriptEngine
     chunk_planner: ChunkPlanner
     prompt_builder: PromptBuilder
-    sora_client: SoraClient
+    media_client: SoraClient | VeoClient
     voice_manager: VoiceSessionManager
     stitcher: Stitcher
 
@@ -99,13 +111,10 @@ class PipelineOrchestrator:
     def default(cls, config: PipelineConfig | None = None) -> "PipelineOrchestrator":
         config = config or PipelineConfig()
         data_root = config.data_root
-        return cls(
-            config=config,
-            article_ingestor=ArticleIngestor(),
-            script_engine=ScriptEngine(llm=config.build_llm()),
-            chunk_planner=ChunkPlanner(),
-            prompt_builder=PromptBuilder(default_voice=config.voice_id),
-            sora_client=SoraClient(
+
+        provider = config.media_provider.lower()
+        if provider == "sora":
+            media_client: SoraClient | VeoClient = SoraClient(
                 asset_dir=data_root / "media/sora_clips",
                 api_key=os.getenv(config.sora_api_key_env),
                 model=config.sora_model,
@@ -113,7 +122,28 @@ class PipelineOrchestrator:
                 poll_interval=config.sora_poll_interval,
                 request_timeout=config.sora_request_timeout,
                 max_wait=config.sora_max_wait,
-            ),
+            )
+        elif provider == "veo":
+            media_client = VeoClient(
+                asset_dir=data_root / "media/veo_clips",
+                api_key=os.getenv(config.veo_api_key_env),
+                model=config.veo_model,
+                aspect_ratio=config.veo_aspect_ratio,
+                poll_interval=config.veo_poll_interval,
+                max_wait=config.veo_max_wait,
+                max_concurrent_requests=config.veo_max_concurrent_requests,
+                submit_cooldown=config.veo_submit_cooldown,
+            )
+        else:
+            raise ValueError(f"Unsupported media_provider '{config.media_provider}'")
+
+        return cls(
+            config=config,
+            article_ingestor=ArticleIngestor(),
+            script_engine=ScriptEngine(llm=config.build_llm()),
+            chunk_planner=ChunkPlanner(),
+            prompt_builder=PromptBuilder(default_voice=config.voice_id, negative_prompt=config.negative_prompt),
+            media_client=media_client,
             voice_manager=VoiceSessionManager(base_dir=data_root / "media/voice"),
             stitcher=Stitcher(export_dir=data_root / "exports"),
         )
@@ -176,22 +206,46 @@ class PipelineOrchestrator:
                 else:
                     logger.warning("No voice directive supplied; skipping voice preparation")
 
+        provider = self.config.media_provider.lower()
         if prompts_only:
-            logger.info("Prompts-only mode: skipping Sora submission")
-            sora_assets: list[Path] = []
+            logger.info("Prompts-only mode: skipping media submission")
+            media_assets: list[Path] = []
         else:
-            real_sora = self.config.use_real_sora and not dry_run
-            if real_sora and not self.sora_client.api_key:
-                raise RuntimeError(
-                    f"Missing Sora API key. Set {self.config.sora_api_key_env} in your environment."
-                )
-            submit_dry_run = not real_sora
-            logger.info("Submitting prompts to Sora (dry_run=%s)", submit_dry_run)
-            sora_assets = self.sora_client.submit_prompts(prompts.sora_prompts, dry_run=submit_dry_run)
+            if provider == "sora":
+                real_sora = self.config.use_real_sora and not dry_run
+                if real_sora and not getattr(self.media_client, "api_key", None):
+                    raise RuntimeError(
+                        f"Missing Sora API key. Set {self.config.sora_api_key_env} in your environment."
+                    )
+                submit_dry_run = not real_sora
+                logger.info("Submitting prompts to Sora (dry_run=%s)", submit_dry_run)
+                media_assets = self.media_client.submit_prompts(prompts.sora_prompts, dry_run=submit_dry_run)
+            elif provider == "veo":
+                if dry_run:
+                    logger.info("Dry run: skipping Veo submission")
+                    media_assets = self.media_client.submit_prompts(prompts.sora_prompts, dry_run=True)
+                else:
+                    if not getattr(self.media_client, "api_key", None):
+                        raise RuntimeError(
+                            f"Missing Veo API key. Set {self.config.veo_api_key_env} in your environment."
+                        )
+                    logger.info("Submitting prompts to Veo model %s", self.config.veo_model)
+                    media_assets = self.media_client.submit_prompts(prompts.sora_prompts, dry_run=False)
+            else:
+                raise ValueError(f"Unsupported media_provider '{self.config.media_provider}'")
 
         final_video = bundle.final_video
-        if not prompts_only and not dry_run and self.config.use_real_sora and sora_assets:
-            final_video = self.stitcher.stitch(sora_assets, voice_asset)
+        should_stitch = (
+            not prompts_only
+            and not dry_run
+            and (
+                (provider == "sora" and self.config.use_real_sora)
+                or (provider == "veo")
+            )
+            and media_assets
+        )
+        if should_stitch:
+            final_video = self.stitcher.stitch(media_assets, voice_asset)
         else:
             reason = "prompts-only mode" if prompts_only else "dry run or no assets"
             logger.info("Skipping stitching (%s)", reason)
@@ -199,7 +253,7 @@ class PipelineOrchestrator:
         output_dir.mkdir(parents=True, exist_ok=True)
         return bundle.model_copy(
             update={
-                "sora_assets": sora_assets,
+                "sora_assets": media_assets,
                 "voice_transcript": voice_asset,
                 "final_video": final_video,
             }
