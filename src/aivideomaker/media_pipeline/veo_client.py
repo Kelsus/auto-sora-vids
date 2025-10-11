@@ -5,10 +5,17 @@ import time
 import random
 from collections import deque
 from pathlib import Path
-from typing import Deque, Iterable, Tuple
+from typing import Deque, Iterable, Optional, Tuple
 
 from google import genai
 from google.genai import types
+
+try:
+    from google.oauth2 import service_account
+    import google.auth as google_auth
+except ImportError:  # pragma: no cover - defensive guard in case auth libs are missing
+    service_account = None  # type: ignore[assignment]
+    google_auth = None  # type: ignore[assignment]
 
 from aivideomaker.prompt_builder.model import SoraPrompt
 
@@ -33,6 +40,10 @@ class VeoClient:
         seed: int | None = None,
         max_concurrent_requests: int = 2,
         submit_cooldown: float = 0.0,
+        use_vertex: bool = False,
+        project: str | None = None,
+        location: str | None = None,
+        credentials_path: Path | None = None,
     ) -> None:
         self.asset_dir = asset_dir
         self.asset_dir.mkdir(parents=True, exist_ok=True)
@@ -41,16 +52,20 @@ class VeoClient:
         self.aspect_ratio = aspect_ratio
         self.poll_interval = poll_interval
         self.max_wait = max_wait
-        self.client = genai.Client(api_key=api_key) if api_key else None
         self.seed = seed if seed is not None else random.randint(0, 2**31 - 1)
         self.max_concurrent_requests = max(1, max_concurrent_requests)
         self.submit_cooldown = max(0.0, submit_cooldown)
         self._last_submit_at = 0.0
+        self.use_vertex = use_vertex
+        self.project = project
+        self.location = location or "us-central1"
+        self.credentials_path = Path(credentials_path) if credentials_path else None
+        self.client = self._build_client()
         self._supports_seed = bool(getattr(getattr(self.client, "_api_client", None), "vertexai", False)) if self.client else False
         if self._supports_seed:
-            logger.info("Initialized Veo client with seed %s", self.seed)
+            logger.info("Initialized Veo client for Vertex AI project %s with seed %s", self.project, self.seed)
         else:
-            logger.info("Initialized Veo client; seed %s will be ignored (not supported by current API)", self.seed)
+            logger.info("Initialized Veo client; seed %s will be ignored (Gemini API does not support seeds)", self.seed)
 
     def submit_prompts(self, prompts: Iterable[SoraPrompt], dry_run: bool = True) -> list[Path]:
         assets: list[Path] = []
@@ -164,3 +179,52 @@ class VeoClient:
 
         self.client.files.download(file=video_asset)
         video_asset.save(str(target))
+
+    # Client helpers -------------------------------------------------
+
+    def _build_client(self) -> Optional[genai.Client]:
+        if self.use_vertex:
+            return self._build_vertex_client()
+        if self.api_key:
+            logger.info("Using Gemini API key authentication for Veo")
+            return genai.Client(api_key=self.api_key)
+        logger.warning("No Veo API credentials provided; client will operate in dry-run mode only")
+        return None
+
+    def _build_vertex_client(self) -> genai.Client:
+        if service_account is None:
+            raise RuntimeError(
+                "google.oauth2 is required for Vertex AI authentication; install google-auth."
+            )
+        credentials = None
+        project = self.project
+
+        if self.credentials_path and self.credentials_path.exists():
+            logger.info("Loading Vertex credentials from %s", self.credentials_path)
+            credentials = service_account.Credentials.from_service_account_file(
+                str(self.credentials_path),
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+            project = project or getattr(credentials, "project_id", None)
+        else:
+            logger.info("Falling back to application default credentials for Vertex")
+            if google_auth is None:
+                raise RuntimeError(
+                    "google.auth is required for Vertex AI authentication; install google-auth."
+                )
+            credentials, default_project = google_auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            project = project or default_project
+
+        if not project:
+            raise RuntimeError("Vertex AI configuration requires a project ID")
+
+        self.project = project
+        logger.info("Initialized Vertex AI Veo client for project %s in %s", project, self.location)
+        return genai.Client(
+            vertexai=True,
+            project=project,
+            location=self.location,
+            credentials=credentials,
+        )

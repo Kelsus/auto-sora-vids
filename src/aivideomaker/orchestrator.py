@@ -50,6 +50,10 @@ class PipelineConfig(BaseModel):
     veo_max_wait: float = 600.0
     veo_max_concurrent_requests: int = 2
     veo_submit_cooldown: float = 0.0
+    veo_use_vertex: bool = True
+    veo_project: Optional[str] = None
+    veo_location: str = "us-central1"
+    veo_credentials_path: Optional[Path] = Path("google-api-key.json")
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineConfig":
@@ -133,6 +137,10 @@ class PipelineOrchestrator:
                 max_wait=config.veo_max_wait,
                 max_concurrent_requests=config.veo_max_concurrent_requests,
                 submit_cooldown=config.veo_submit_cooldown,
+                use_vertex=config.veo_use_vertex,
+                project=config.veo_project,
+                location=config.veo_location,
+                credentials_path=config.veo_credentials_path,
             )
         else:
             raise ValueError(f"Unsupported media_provider '{config.media_provider}'")
