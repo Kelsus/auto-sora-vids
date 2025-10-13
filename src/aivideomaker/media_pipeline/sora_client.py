@@ -24,7 +24,7 @@ class SoraClient:
 
     def __init__(
         self,
-        asset_dir: Path,
+        asset_dir: Path | None = None,
         api_key: str | None = None,
         model: str = "sora-2",
         size: str = "1280x720",
@@ -33,7 +33,7 @@ class SoraClient:
         max_wait: float = 600.0,
         submit_cooldown: float = 1.0,
     ) -> None:
-        self._asset_dir = Path(asset_dir)
+        self._asset_dir = Path(asset_dir) if asset_dir is not None else None
         self.api_key = api_key
         self.model = model
         self.size = size
@@ -46,17 +46,25 @@ class SoraClient:
 
     @property
     def asset_dir(self) -> Path:
+        if self._asset_dir is None:
+            raise RuntimeError("Sora asset directory is not configured")
         return self._asset_dir
 
     @asset_dir.setter
     def asset_dir(self, value: Path) -> None:
         self._asset_dir = Path(value)
 
+    def _require_asset_dir(self) -> Path:
+        if self._asset_dir is None:
+            raise RuntimeError("Sora asset directory is not configured")
+        self._asset_dir.mkdir(parents=True, exist_ok=True)
+        return self._asset_dir
+
     def submit_prompts(self, prompts: Iterable[SoraPrompt], dry_run: bool = True) -> list[Path]:
         assets: list[Path] = []
-        self.asset_dir.mkdir(parents=True, exist_ok=True)
+        asset_dir = self._require_asset_dir()
         for prompt in prompts:
-            target = self.asset_dir / f"{prompt.chunk_id}.mp4"
+            target = asset_dir / f"{prompt.chunk_id}.mp4"
             if target.exists() and target.stat().st_size > 0:
                 logger.info("Sora asset already exists for %s; skipping", prompt.chunk_id)
                 assets.append(target)

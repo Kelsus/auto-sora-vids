@@ -37,7 +37,7 @@ class VeoClient:
 
     def __init__(
         self,
-        asset_dir: Path,
+        asset_dir: Path | None = None,
         api_key: str | None = None,
         model: str = "veo-3.0-generate-001",
         aspect_ratio: str = "16:9",
@@ -51,7 +51,7 @@ class VeoClient:
         location: str | None = None,
         credentials_path: Path | None = None,
     ) -> None:
-        self._asset_dir = Path(asset_dir)
+        self._asset_dir = Path(asset_dir) if asset_dir is not None else None
         self.api_key = api_key
         self.model = model
         self.aspect_ratio = aspect_ratio
@@ -75,18 +75,26 @@ class VeoClient:
 
     @property
     def asset_dir(self) -> Path:
+        if self._asset_dir is None:
+            raise RuntimeError("Veo asset directory is not configured")
         return self._asset_dir
 
     @asset_dir.setter
     def asset_dir(self, value: Path) -> None:
         self._asset_dir = Path(value)
 
+    def _require_asset_dir(self) -> Path:
+        if self._asset_dir is None:
+            raise RuntimeError("Veo asset directory is not configured")
+        self._asset_dir.mkdir(parents=True, exist_ok=True)
+        return self._asset_dir
+
     def submit_prompts(self, prompts: Iterable[SoraPrompt], dry_run: bool = True) -> list[Path]:
         assets: list[Path] = []
         pending: Deque[Tuple[SoraPrompt, types.GenerateVideosOperation, Path]] = deque()
-        self.asset_dir.mkdir(parents=True, exist_ok=True)
+        asset_dir = self._require_asset_dir()
         for prompt in prompts:
-            target = self.asset_dir / f"{prompt.chunk_id}.mp4"
+            target = asset_dir / f"{prompt.chunk_id}.mp4"
             if dry_run or not self.client:
                 logger.info("Veo dry run: creating placeholder for %s", prompt.chunk_id)
                 target.touch()

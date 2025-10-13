@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field
 
 from aivideomaker.article_ingest.model import ArticleBundle, slugify
@@ -26,11 +27,15 @@ from aivideomaker.media_pipeline.voice import VoiceSessionManager, NarrationAsse
 from aivideomaker.media_pipeline.elevenlabs_music_client import ElevenLabsMusicClient
 from aivideomaker.stitcher.assembler import Stitcher, CaptionSegment
 
+_dotenv_path = find_dotenv(usecwd=True)
+if _dotenv_path:
+    load_dotenv(_dotenv_path, override=False)
+
 logger = logging.getLogger(__name__)
 
 
 class PipelineConfig(BaseModel):
-    data_root: Path = Path("data")
+    data_root: Path = Path("data/runs")
     voice_id: Optional[str] = None
     llm_provider: str = "claude"
     llm_model: str = "claude-sonnet-4-5"
@@ -140,11 +145,12 @@ class PipelineOrchestrator:
     def default(cls, config: PipelineConfig | None = None) -> "PipelineOrchestrator":
         config = config or PipelineConfig()
         data_root = config.data_root
+        placeholder_root = data_root / ".placeholder"
 
         provider = config.media_provider.lower()
         if provider == "sora":
             media_client: SoraClient | VeoClient = SoraClient(
-                asset_dir=data_root / "media/sora_clips",
+                asset_dir=None,
                 api_key=os.getenv(config.sora_api_key_env),
                 model=config.sora_model,
                 size=config.sora_size,
@@ -155,7 +161,7 @@ class PipelineOrchestrator:
             )
         elif provider == "veo":
             media_client = VeoClient(
-                asset_dir=data_root / "media/veo_clips",
+                asset_dir=None,
                 api_key=os.getenv(config.veo_api_key_env),
                 model=config.veo_model,
                 aspect_ratio=config.veo_aspect_ratio,
@@ -200,7 +206,7 @@ class PipelineOrchestrator:
                 try:
                     music_client = ElevenLabsMusicClient(
                         api_key=music_key,
-                        output_dir=data_root / "media/music",
+                        output_dir=placeholder_root / "music",
                         model_id=config.music_model_id,
                         force_instrumental=config.music_force_instrumental,
                         output_format=config.music_output_format,
@@ -225,12 +231,12 @@ class PipelineOrchestrator:
             ),
             media_client=media_client,
             voice_manager=VoiceSessionManager(
-                base_dir=data_root / "media/voice",
+                base_dir=placeholder_root / "voice",
                 eleven_client=elevenlabs_client,
                 default_voice_id=narration_voice_id,
             ),
             music_client=music_client,
-            stitcher=Stitcher(export_dir=data_root / "exports"),
+            stitcher=Stitcher(export_dir=placeholder_root / "exports"),
         )
 
     def run(

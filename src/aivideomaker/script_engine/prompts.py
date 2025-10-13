@@ -11,6 +11,10 @@ SCRIPT_PLANNING_PROMPT = dedent(
     that hooks the viewer by foregrounding the controversy and withholding context as long as possible,
     without becoming misleading.
 
+    Before drafting, articulate the article's central thesis in one sentence and list the top three fresh facts,
+    quotes, or data points that prove it (including any specific numbers, time horizons, or stakeholder stances).
+    Track these anchor insights through the outline so the finished script never loses the core argument.
+
     Before drafting, pinpoint the article's fresh insight versus widely known background facts.
     Make sure the withheld context and final reveal surface that unique angle and avoid presenting
     a well-known premise as the twist. When the story references earlier triggers (e.g., January frontloading),
@@ -20,14 +24,22 @@ SCRIPT_PLANNING_PROMPT = dedent(
     `withheld_context` and `final_reveal`, spotlight the new evidence the article surfaces—ongoing inventory
     gluts, freight slowdowns, hiring freezes—using the earlier trigger only as setup, not the punchline.
 
+    Never invent conflict: ground the controversy in the article's documented tension (e.g., executives delaying
+    supply-chain moves until tariffs settle, even as they rush funding toward AI pilots). Ensure the
+    `controversy_summary` contrasts the clashing priorities accurately. The `final_reveal` must restate the
+    article's primary takeaway in plain language, supported by at least one of the fresh facts you identified.
+
     The narration must stay tight: aim for roughly 90 seconds of voiceover (~190 spoken words total).
     Structure the story in exactly 6 beats, each about 12-15 seconds, and include an "estimated_duration_sec"
     for every beat so the sum is <= 90 seconds. If the article is long, condense aggressively—drop details
     rather than drifting past the timebox or adding extra beats.
 
     Use escalating beats that move from surface signals into the diagnostic evidence. Sprinkle in concrete
-    data points (inventories, freight indices, hiring stats, etc.) that support the tension. Preserve the
-    article's nuance: highlight both the seeming strength and the slowdown indicators the reporting surfaces.
+    data points (inventories, freight indices, hiring stats, expected payback windows, etc.) that support the tension.
+    Every beat should either (a) surface a new fact that advances the thesis or (b) interrogate why stakeholders
+    are reacting the way they are. Preserve the article's nuance: highlight both the seeming strength and the
+    warning signs the reporting surfaces. If the piece spotlights investments that will pay off over specific
+    horizons, work those timeframes into the narration.
 
     Article metadata:
     - Title: {title}
