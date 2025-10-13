@@ -262,7 +262,7 @@ class PipelineOrchestrator:
 
         narration_asset: NarrationAsset | None = None
         alignment_payload: dict | None = None
-        if self.voice_manager.eleven_client:
+        if not prompts_only and self.voice_manager.eleven_client:
             voice_id = self.config.narration_voice_id or self.config.voice_id
             narration_asset = self.voice_manager.prepare_voice(
                 script_text=script.full_transcript,
@@ -275,7 +275,12 @@ class PipelineOrchestrator:
             self._write_social_caption(script.social_caption, run_dirs["export_dir"])
 
         music_path: Path | None = None
-        if self.music_client and self.config.use_music and not dry_run:
+        if (
+            not prompts_only
+            and self.music_client
+            and self.config.use_music
+            and not dry_run
+        ):
             try:
                 prompt = self._render_music_prompt(article, script)
                 music_path = self.music_client.compose(
