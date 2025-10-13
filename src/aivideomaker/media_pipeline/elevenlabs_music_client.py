@@ -37,8 +37,7 @@ class ElevenLabsMusicClient:
         self.force_instrumental = force_instrumental
         self.output_format = output_format
         self.request_timeout = request_timeout
-        self.output_dir = output_dir
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir = Path(output_dir)
 
     def compose(
         self,
@@ -48,6 +47,7 @@ class ElevenLabsMusicClient:
         title: str | None = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Path:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         payload: Dict[str, Any] = {
             "prompt": prompt,
             "music_length_ms": int(max(duration_sec, 3.0) * 1000),

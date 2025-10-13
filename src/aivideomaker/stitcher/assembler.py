@@ -28,8 +28,15 @@ class CaptionSegment:
 
 class Stitcher:
     def __init__(self, export_dir: Path) -> None:
-        self.export_dir = export_dir
-        self.export_dir.mkdir(parents=True, exist_ok=True)
+        self._export_dir = Path(export_dir)
+
+    @property
+    def export_dir(self) -> Path:
+        return self._export_dir
+
+    @export_dir.setter
+    def export_dir(self, value: Path) -> None:
+        self._export_dir = Path(value)
 
     def stitch(
         self,
@@ -42,6 +49,7 @@ class Stitcher:
         music_volume: float = 0.12,
         level_audio: bool = True,
     ) -> Path:
+        self.export_dir.mkdir(parents=True, exist_ok=True)
         clips = [VideoFileClip(str(path)) for path in video_paths]
         if not clips:
             raise ValueError("No clips supplied for stitching")

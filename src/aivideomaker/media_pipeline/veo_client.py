@@ -51,8 +51,7 @@ class VeoClient:
         location: str | None = None,
         credentials_path: Path | None = None,
     ) -> None:
-        self.asset_dir = asset_dir
-        self.asset_dir.mkdir(parents=True, exist_ok=True)
+        self._asset_dir = Path(asset_dir)
         self.api_key = api_key
         self.model = model
         self.aspect_ratio = aspect_ratio
@@ -74,9 +73,18 @@ class VeoClient:
         else:
             logger.info("Initialized Veo client; seed %s will be ignored (Gemini API does not support seeds)", self.seed)
 
+    @property
+    def asset_dir(self) -> Path:
+        return self._asset_dir
+
+    @asset_dir.setter
+    def asset_dir(self, value: Path) -> None:
+        self._asset_dir = Path(value)
+
     def submit_prompts(self, prompts: Iterable[SoraPrompt], dry_run: bool = True) -> list[Path]:
         assets: list[Path] = []
         pending: Deque[Tuple[SoraPrompt, types.GenerateVideosOperation, Path]] = deque()
+        self.asset_dir.mkdir(parents=True, exist_ok=True)
         for prompt in prompts:
             target = self.asset_dir / f"{prompt.chunk_id}.mp4"
             if dry_run or not self.client:

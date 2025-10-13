@@ -28,10 +28,17 @@ class VoiceSessionManager:
         eleven_client: ElevenLabsClient | None = None,
         default_voice_id: str | None = None,
     ) -> None:
-        self.base_dir = base_dir
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self._base_dir = Path(base_dir)
         self.eleven_client = eleven_client
         self.default_voice_id = default_voice_id
+
+    @property
+    def base_dir(self) -> Path:
+        return self._base_dir
+
+    @base_dir.setter
+    def base_dir(self, value: Path) -> None:
+        self._base_dir = Path(value)
 
     def prepare_voice(
         self,

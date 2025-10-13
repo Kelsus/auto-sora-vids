@@ -33,8 +33,7 @@ class SoraClient:
         max_wait: float = 600.0,
         submit_cooldown: float = 1.0,
     ) -> None:
-        self.asset_dir = asset_dir
-        self.asset_dir.mkdir(parents=True, exist_ok=True)
+        self._asset_dir = Path(asset_dir)
         self.api_key = api_key
         self.model = model
         self.size = size
@@ -45,8 +44,17 @@ class SoraClient:
         self.submit_cooldown = max(0.0, submit_cooldown)
         self._last_submit_at = 0.0
 
+    @property
+    def asset_dir(self) -> Path:
+        return self._asset_dir
+
+    @asset_dir.setter
+    def asset_dir(self, value: Path) -> None:
+        self._asset_dir = Path(value)
+
     def submit_prompts(self, prompts: Iterable[SoraPrompt], dry_run: bool = True) -> list[Path]:
         assets: list[Path] = []
+        self.asset_dir.mkdir(parents=True, exist_ok=True)
         for prompt in prompts:
             target = self.asset_dir / f"{prompt.chunk_id}.mp4"
             if target.exists() and target.stat().st_size > 0:
