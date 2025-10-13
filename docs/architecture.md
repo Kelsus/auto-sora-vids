@@ -23,12 +23,15 @@
 ## Storage Layout
 ```
 ./data/
-  articles/       # Raw & cleaned article versions
-  scripts/        # JSON outputs describing beats & prompts
-  media/
-    sora_clips/   # Generated video clips
-    voice/        # Voice assets per cameo talent
-  exports/        # Final rendered videos
+  runs/
+    <slug>/                     # Per-article run directory (slugified URL)
+      bundle.json               # Serialized article, script, prompts, media metadata
+      media/
+        sora_clips/             # Generated or placeholder clips for each chunk
+        voice/                  # Narration transcript, audio, and alignment payloads
+        music/                  # Optional music tracks when enabled
+      exports/
+        social_caption.txt      # Caption drafts and stitched deliverables
 ```
 
 ## Extensibility Considerations

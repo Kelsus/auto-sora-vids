@@ -45,7 +45,12 @@ src/aivideomaker/
    ```bash
    aivideo "https://example.com/news/article"
    ```
-   The command writes a JSON bundle into `data/scripts/<slug>.json`, creates placeholder Sora assets under `data/media/sora_clips/`, and stores a combined narration transcript in `data/media/voice/`.
+   The command writes a prompt bundle and run artifacts into `data/runs/<slug>/`, including:
+   - `bundle.json` — serialized article, script, prompts, and media metadata.
+   - `media/sora_clips/` — generated or placeholder video clips.
+   - `media/voice/` — narration transcript, audio, and alignment data.
+   - `media/music/` — optional music tracks (when enabled).
+   - `exports/` — stitched outputs and social caption drafts.
 
    To review prompts without touching Sora or generating transcripts, add `--prompts-only`:
    ```bash
@@ -55,8 +60,8 @@ src/aivideomaker/
 
    Once satisfied with the prompts, you can render them later from the saved JSON bundle:
    ```bash
-   aivideo --prompt-bundle data/scripts/example-article.json --dry-run   # placeholder artifacts
-   aivideo --prompt-bundle data/scripts/example-article.json              # contacts Sora if enabled
+   aivideo --prompt-bundle data/runs/example-article/bundle.json --dry-run   # placeholder artifacts
+   aivideo --prompt-bundle data/runs/example-article/bundle.json              # contacts Sora if enabled
    ```
 
 4. **Enable real integrations** (future work):
