@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class Beat(BaseModel):
@@ -23,3 +23,20 @@ class ScriptPlan(BaseModel):
     controversy_summary: str
     withheld_context: str
     final_reveal: str
+    social_caption: Optional["SocialCaption"] = None
+
+    @computed_field
+    @property
+    def full_transcript(self) -> str:
+        """Canonical narration assembled from beat transcripts."""
+        lines: list[str] = []
+        for beat in self.beats:
+            text = beat.transcript.strip()
+            if text:
+                lines.append(text)
+        return "\n\n".join(lines)
+
+
+class SocialCaption(BaseModel):
+    description: str
+    hashtags: List[str] = Field(default_factory=list)

@@ -8,8 +8,13 @@ from .model import PromptBundle, SoraPrompt, VoiceDirective
 
 
 class PromptBuilder:
-    def __init__(self, default_voice: str = "cameo_default") -> None:
+    def __init__(
+        self,
+        default_voice: str | None = None,
+        negative_prompt: str | None = None,
+    ) -> None:
         self.default_voice = default_voice
+        self.negative_prompt = negative_prompt
 
     def build(self, article: ArticleBundle, script: ScriptPlan, chunks: ChunkPlan) -> PromptBundle:
         beat_map = {beat.id: beat for beat in script.beats}
@@ -18,14 +23,20 @@ class PromptBuilder:
             beat = beat_map[chunk.beat_id]
             visual_prompt = self._visual_prompt(article, beat.purpose, beat.visual_seed)
             audio_prompt = self._audio_prompt(beat)
+            voice_directive = (
+                VoiceDirective(voice_id=self.default_voice)
+                if self.default_voice
+                else None
+            )
             sora_prompts.append(
                 SoraPrompt(
-                    chunk_id=chunk.beat_id,
+                    chunk_id=getattr(chunk, "id", chunk.beat_id),
                     transcript=chunk.transcript,
                     visual_prompt=visual_prompt,
                     audio_prompt=audio_prompt,
                     duration_sec=chunk.estimated_duration_sec,
-                    cameo_voice=VoiceDirective(voice_id=self.default_voice),
+                    negative_prompt=self.negative_prompt,
+                    cameo_voice=voice_directive,
                 )
             )
         return PromptBundle(article_slug=article.article.metadata.slug, sora_prompts=sora_prompts)
@@ -34,6 +45,8 @@ class PromptBuilder:
         base = f"News story about {article.article.metadata.title}." if article.article.metadata.title else "Contemporary news setting."
         if seed:
             base += f" Focus on {seed}."
+        base += " Vertical 9:16 frame, optimized for smartphone viewing."
+        base += " Avoid any on-screen text or subtitles."
         if purpose.lower() == "hook":
             base += " Dramatic close-ups, high contrast lighting."
         elif purpose.lower() == "reveal":

@@ -18,7 +18,8 @@ dependencies = [
   "moviepy>=1.0,<2.0",
   "ffmpeg-python>=0.2",
   "soundfile>=0.12",
-  "anthropic>=0.20"
+  "anthropic>=0.20",
+  "google-cloud-storage>=3.4"
 ]
 
 [project.optional-dependencies]

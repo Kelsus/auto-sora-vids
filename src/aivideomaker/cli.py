@@ -17,8 +17,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("data/scripts"),
-        help="Directory to write structured prompt bundle JSON",
+        default=Path("data/runs"),
+        help="Base directory for per-article outputs",
     )
     parser.add_argument(
         "--config",
@@ -39,6 +39,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompt-bundle",
         type=Path,
         help="Path to a previously generated bundle JSON to execute against Sora",
+    )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Delete existing artifacts for this URL before regenerating",
+    )
+    parser.add_argument(
+        "--stitch-only",
+        action="store_true",
+        help="Skip media submission and only stitch existing assets",
     )
     return parser
 
@@ -62,6 +72,8 @@ def main() -> None:
             output_dir=args.output_dir,
             dry_run=args.dry_run,
             prompts_only=args.prompts_only,
+            cleanup=args.cleanup,
+            stitch_only=args.stitch_only,
         )
     else:
         if not args.url:
@@ -71,10 +83,13 @@ def main() -> None:
             output_dir=args.output_dir,
             dry_run=args.dry_run,
             prompts_only=args.prompts_only,
+            cleanup=args.cleanup,
+            stitch_only=args.stitch_only,
         )
 
-    output_path = args.output_dir / f"{bundle.article.slug}.json"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    run_dir = (args.output_dir / bundle.article.slug)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    output_path = run_dir / "bundle.json"
     payload = bundle.model_dump(mode="json")
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"Wrote prompt bundle to {output_path}")

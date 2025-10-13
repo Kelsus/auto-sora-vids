@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
-import time
 import random
+import time
 from collections import deque
 from pathlib import Path
 from typing import Deque, Iterable, Optional, Tuple
+from urllib.parse import urlparse
 
 from google import genai
 from google.genai import types
@@ -16,6 +17,11 @@ try:
 except ImportError:  # pragma: no cover - defensive guard in case auth libs are missing
     service_account = None  # type: ignore[assignment]
     google_auth = None  # type: ignore[assignment]
+
+try:
+    from google.cloud import storage
+except ImportError:  # pragma: no cover - optional dependency for Vertex downloads
+    storage = None  # type: ignore[assignment]
 
 from aivideomaker.prompt_builder.model import SoraPrompt
 
@@ -60,6 +66,7 @@ class VeoClient:
         self.project = project
         self.location = location or "us-central1"
         self.credentials_path = Path(credentials_path) if credentials_path else None
+        self._credentials = None
         self.client = self._build_client()
         self._supports_seed = bool(getattr(getattr(self.client, "_api_client", None), "vertexai", False)) if self.client else False
         if self._supports_seed:
@@ -89,12 +96,16 @@ class VeoClient:
     # Internal helpers -------------------------------------------------
 
     def _safe_duration(self, prompt: SoraPrompt) -> int:
-        # Veo currently produces up to 8-second clips; round down to stay within limits.
-        return max(4, min(8, int(round(prompt.duration_sec or 8))))
+        # Veo supports 4, 6, or 8 second outputs; choose the smallest allowed duration
+        # that can accommodate the requested length.
+        approx = max(4.0, min(8.0, float(prompt.duration_sec or 8)))
+        for candidate in (4, 6, 8):
+            if approx <= candidate:
+                return candidate
+        return 8
 
     def _compose_prompt(self, prompt: SoraPrompt) -> str:
         segments = [prompt.visual_prompt]
-        segments.append(f"Ensure visuals support this narration: {prompt.transcript}")
         segments.append(f"Audio direction: {prompt.audio_prompt}.")
         if prompt.negative_prompt:
             segments.append(f"Avoid: {prompt.negative_prompt}.")
@@ -177,8 +188,11 @@ class VeoClient:
         if video_asset is None:
             raise VeoJobError("Veo response missing video asset data")
 
-        self.client.files.download(file=video_asset)
-        video_asset.save(str(target))
+        if self.use_vertex:
+            self._save_vertex_video(video_asset, target)
+        else:
+            self.client.files.download(file=video_asset)
+            video_asset.save(str(target))
 
     # Client helpers -------------------------------------------------
 
@@ -221,6 +235,7 @@ class VeoClient:
             raise RuntimeError("Vertex AI configuration requires a project ID")
 
         self.project = project
+        self._credentials = credentials
         logger.info("Initialized Vertex AI Veo client for project %s in %s", project, self.location)
         return genai.Client(
             vertexai=True,
@@ -228,3 +243,45 @@ class VeoClient:
             location=self.location,
             credentials=credentials,
         )
+
+    def _save_vertex_video(self, video_asset: types.Video, target: Path) -> None:
+        if video_asset is None:
+            raise VeoJobError("Veo response missing video asset data")
+        video_bytes = getattr(video_asset, "video_bytes", None)
+        if video_bytes:
+            target.write_bytes(video_bytes)
+            return
+        uri = getattr(video_asset, "uri", None)
+        if not uri:
+            raise VeoJobError("Vertex video asset missing downloadable URI")
+        if uri.startswith("gs://"):
+            self._download_gcs_uri(uri, target)
+            return
+        self._download_with_authorized_session(uri, target)
+
+    def _download_gcs_uri(self, uri: str, target: Path) -> None:
+        if storage is None:
+            raise RuntimeError("google-cloud-storage is required to download Vertex assets")
+        parsed = urlparse(uri)
+        bucket_name = parsed.netloc
+        blob_name = parsed.path.lstrip("/")
+        if not bucket_name or not blob_name:
+            raise VeoJobError(f"Malformed GCS URI: {uri}")
+        client = storage.Client(project=self.project, credentials=self._credentials)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        blob.download_to_filename(str(target))
+        logger.info("Downloaded Vertex video from %s", uri)
+
+    def _download_with_authorized_session(self, uri: str, target: Path) -> None:
+        if self._credentials is None:
+            raise VeoJobError(f"Cannot download Veo asset from {uri}; missing credentials")
+        from google.auth.transport.requests import AuthorizedSession
+
+        session = AuthorizedSession(self._credentials)
+        response = session.get(uri, stream=True, timeout=60)
+        response.raise_for_status()
+        with target.open("wb") as handle:
+            for chunk in response.iter_content(chunk_size=8192):
+                handle.write(chunk)
+        logger.info("Downloaded Vertex video via HTTPS from %s", uri)

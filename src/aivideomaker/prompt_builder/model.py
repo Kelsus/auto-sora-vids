@@ -17,6 +17,7 @@ class SoraPrompt(BaseModel):
     visual_prompt: str
     audio_prompt: str
     duration_sec: float = Field(default=10.0)
+    negative_prompt: Optional[str] = None
     cameo_voice: Optional[VoiceDirective] = None
 
 
