@@ -73,7 +73,9 @@ SCRIPT_PLANNING_PROMPT = dedent(
       }}
     }}
 
-    Keep the social caption short (≤100 characters) and supply 5-8 relevant hashtags without the leading '#'.
+    For `social_caption`, write a multi-line caption that opens with a punchy headline line, follows with 4-6 bullet points
+    (each starting with "•") that cite concrete stats, actions, or contradictions from the story, and closes with a one-line
+    takeaway after a blank line. Provide 5-8 relevant hashtags without the leading '#'.
     """
 )
 

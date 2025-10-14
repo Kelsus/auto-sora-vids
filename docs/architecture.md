@@ -31,7 +31,8 @@
         voice/                  # Narration transcript, audio, and alignment payloads
         music/                  # Optional music tracks when enabled
       exports/
-        social_caption.txt      # Caption drafts and stitched deliverables
+        <slug>.mp4              # Final stitched video (voice + music if available)
+        <slug>.json             # Social caption manifest (rich text + hashtags)
 ```
 
 ## Extensibility Considerations

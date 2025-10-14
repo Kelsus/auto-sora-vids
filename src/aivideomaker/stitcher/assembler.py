@@ -48,6 +48,7 @@ class Stitcher:
         voice_volume: float = 1.0,
         music_volume: float = 0.12,
         level_audio: bool = True,
+        output_basename: str = "final_video",
     ) -> Path:
         self.export_dir.mkdir(parents=True, exist_ok=True)
         clips = [VideoFileClip(str(path)) for path in video_paths]
@@ -90,7 +91,11 @@ class Stitcher:
         if level_audio:
             logger.info("Audio leveling placeholder; integrate ffmpeg filters here")
 
-        output_path = self.export_dir / "final_video.mp4"
+        raw_base = output_basename.strip() or "final_video"
+        safe_base = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in raw_base)
+        if not safe_base:
+            safe_base = "final_video"
+        output_path = self.export_dir / f"{safe_base}.mp4"
         final.write_videofile(
             str(output_path),
             codec="libx264",

@@ -121,6 +121,7 @@ class PipelineBundle(BaseModel):
     narration_alignment: Optional[Path] = None
     narration_alignment_payload: Optional[dict] = None
     music_track: Optional[Path] = None
+    social_caption_path: Optional[Path] = None
     final_video: Optional[Path]
 
 
@@ -262,6 +263,8 @@ class PipelineOrchestrator:
         logger.info("Ingesting article: %s", article_url)
         article = self.article_ingestor.ingest(article_url)
         run_dirs = self._prepare_run_environment(article.slug, output_dir, cleanup)
+        filename_base = article.slug
+        article_title = article.article.metadata.title
 
         logger.info("Generating suspenseful script")
         script = self.script_engine.generate_script(article)
@@ -277,8 +280,14 @@ class PipelineOrchestrator:
             )
             alignment_payload = narration_asset.alignment_payload
 
+        caption_path: Path | None = None
         if script.social_caption:
-            self._write_social_caption(script.social_caption, run_dirs["export_dir"])
+            caption_path = self._write_social_caption(
+                script.social_caption,
+                run_dirs["export_dir"],
+                article_title=article_title,
+                base_name=filename_base,
+            )
 
         music_path: Path | None = None
         if (
@@ -315,6 +324,7 @@ class PipelineOrchestrator:
             narration_alignment=(narration_asset.alignment_path if narration_asset else None),
             narration_alignment_payload=alignment_payload,
             music_track=music_path,
+            social_caption_path=caption_path,
             final_video=None,
         )
         return self.execute_prompts(
@@ -368,16 +378,40 @@ class PipelineOrchestrator:
             "export_dir": export_dir,
         }
 
-    def _write_social_caption(self, caption: SocialCaption, export_dir: Path) -> None:
+    def _write_social_caption(
+        self,
+        caption: SocialCaption,
+        export_dir: Path,
+        *,
+        article_title: str,
+        base_name: str,
+    ) -> Path:
         export_dir.mkdir(parents=True, exist_ok=True)
         description = caption.description.strip()
-        tags = [tag.lstrip('#') for tag in caption.hashtags]
-        hashtags = ' '.join(f"#{tag}" for tag in tags if tag)
-        output = export_dir / "social_caption.txt"
-        content = description
-        if hashtags:
-            content = f"{description}\n\n{hashtags}"
-        output.write_text(content.strip() + "\n", encoding="utf-8")
+        tags = []
+        for tag in caption.hashtags:
+            normalized = tag.strip()
+            if not normalized:
+                continue
+            if not normalized.startswith("#"):
+                normalized = f"#{normalized}"
+            tags.append(normalized)
+        payload = {
+            "title": article_title.strip(),
+            "caption": description,
+            "hashtags": tags,
+            "callToActionUrl": None,
+            "allowLinkedInHashtags": False,
+            "scheduleAt": None,
+            "perChannelOverrides": {
+                "linkedin": {
+                    "caption": description,
+                }
+            },
+        }
+        output = export_dir / f"{base_name}.json"
+        output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        return output
 
     def _build_captions(self, plan: ChunkPlan, use_alignment: bool = False) -> list[CaptionSegment]:
         # Captions currently disabled; returning empty list.
@@ -425,6 +459,23 @@ class PipelineOrchestrator:
     ) -> PipelineBundle:
         run_dirs = self._prepare_run_environment(bundle.article.slug, output_dir, cleanup)
         prompts = bundle.prompts
+
+        caption_path: Path | None = None
+        if bundle.script.social_caption:
+            existing = bundle.social_caption_path
+            if existing:
+                candidate = Path(existing)
+            else:
+                candidate = run_dirs["export_dir"] / f"{bundle.article.slug}.json"
+            if not candidate.exists():
+                caption_path = self._write_social_caption(
+                    bundle.script.social_caption,
+                    run_dirs["export_dir"],
+                    article_title=bundle.article.article.metadata.title,
+                    base_name=bundle.article.slug,
+                )
+            else:
+                caption_path = candidate
 
         narration_asset: NarrationAsset | None = None
         music_track = bundle.music_track
@@ -530,6 +581,7 @@ class PipelineOrchestrator:
                 voice_track,
                 music_track,
                 captions=caption_segments,
+                output_basename=bundle.article.slug,
             )
         else:
             reason = "prompts-only mode" if prompts_only else "dry run or no assets"
@@ -544,6 +596,7 @@ class PipelineOrchestrator:
                 "narration_alignment": narration_asset.alignment_path if narration_asset else bundle.narration_alignment,
                 "narration_alignment_payload": narration_asset.alignment_payload if narration_asset else bundle.narration_alignment_payload,
                 "music_track": music_track,
+                "social_caption_path": caption_path or bundle.social_caption_path,
                 "final_video": final_video,
             }
         )
