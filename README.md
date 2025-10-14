@@ -4,6 +4,7 @@ Pipeline for turning news articles into suspenseful, controversy-led video scrip
 
 ## Features (MVP)
 - Fetches and cleans article content from a URL.
+- Converts PDF reports to plain text before downstream processing.
 - Crafts a multi-beat script that delays context for maximum tension (LLM-backed, pluggable).
 - Segments beats into Sora-sized clips with estimated durations and suspense metadata.
 - Outputs structured prompts including transcript, visual direction, audio guidance, and voice directives.
@@ -76,7 +77,6 @@ You can supply a JSON or YAML config to override the data root, voice, or Claude
 {
   "data_root": "./data",
   "voice_id": "cameo_investigator",
-  "use_real_sora": true,
   "sora_model": "sora-2",
   "sora_size": "1280x720",
   "llm_provider": "claude",
@@ -100,5 +100,5 @@ For a two-step workflow, run once with `--prompts-only`, review the JSON bundle,
 
 ## Troubleshooting
 - `Missing Anthropics API key`: export `ANTHROPIC_API_KEY` or place it in a `.env` file before running the CLI.
-- `Missing Sora API key`: export `OPENAI_API_KEY` (or update `sora_api_key_env`) before running without `--dry-run` when `use_real_sora` is `true`.
+- `Missing Sora API key`: export `OPENAI_API_KEY` (or update `sora_api_key_env`) before running without `--dry-run`
 - New Claude model version? Adjust `llm_model` in your config JSON.

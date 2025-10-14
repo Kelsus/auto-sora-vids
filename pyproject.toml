@@ -13,6 +13,7 @@ dependencies = [
   "requests>=2.31",
   "beautifulsoup4>=4.12",
   "trafilatura>=1.6",
+  "pdfminer.six>=20221105",
   "pydantic>=2.5",
   "python-dotenv>=1.0",
   "moviepy>=1.0,<2.0",
