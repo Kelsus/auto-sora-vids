@@ -39,7 +39,7 @@ available options and provides a sample configuration you can copy to
   "sora_size": "720x1280",
   "sora_api_key_env": "OPENAI_API_KEY",
   "sora_poll_interval": 10.0,
-  "sora_request_timeout": 30.0,
+  "sora_request_timeout": 60.0,
   "sora_max_wait": 600.0,
   "sora_submit_cooldown": 1.0,
   "veo_model": "veo-3.0-generate-001",

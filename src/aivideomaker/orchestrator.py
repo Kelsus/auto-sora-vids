@@ -64,7 +64,7 @@ class PipelineConfig(BaseModel):
     sora_size: str = "720x1280"
     sora_api_key_env: str = "OPENAI_API_KEY"
     sora_poll_interval: float = 10.0
-    sora_request_timeout: float = 30.0
+    sora_request_timeout: float = 60.0
     sora_max_wait: float = 600.0
     sora_submit_cooldown: float = 1.0
     # Veo configuration
