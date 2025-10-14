@@ -59,13 +59,12 @@ class PipelineConfig(BaseModel):
     music_output_format: str = "mp3_44100_128"
     music_request_timeout: float = 120.0
     # Sora configuration
-    use_real_sora: bool = False
     sora_model: str = "sora-2"
     sora_size: str = "720x1280"
     sora_api_key_env: str = "OPENAI_API_KEY"
     sora_poll_interval: float = 10.0
     sora_request_timeout: float = 60.0
-    sora_max_wait: float = 600.0
+    sora_max_wait: float = 2400.0
     sora_submit_cooldown: float = 1.0
     # Veo configuration
     veo_model: str = "veo-3.0-generate-001"
@@ -533,7 +532,7 @@ class PipelineOrchestrator:
             media_assets = self._collect_existing_assets(bundle, run_dirs["sora_dir"])
         else:
             if provider == "sora":
-                real_sora = self.config.use_real_sora and not dry_run
+                real_sora = not dry_run
                 if real_sora and not getattr(self.media_client, "api_key", None):
                     raise RuntimeError(
                         f"Missing Sora API key. Set {self.config.sora_api_key_env} in your environment."
@@ -569,7 +568,7 @@ class PipelineOrchestrator:
         should_stitch = (
             (stitch_only or (not prompts_only and not dry_run))
             and (
-                (provider == "sora" and (self.config.use_real_sora or stitch_only))
+                (provider == "sora" and (stitch_only))
                 or (provider == "veo")
             )
             and media_assets
