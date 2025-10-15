@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from textwrap import dedent
+import json
+from textwrap import dedent, indent
+from typing import TYPE_CHECKING
 
 from aivideomaker.article_ingest.model import ArticleBundle
+from .model import ScriptPlan
+
+if TYPE_CHECKING:
+    from .reviewer import ScriptReviewDecision
 
 
 SCRIPT_PLANNING_PROMPT = dedent(
@@ -49,7 +55,7 @@ SCRIPT_PLANNING_PROMPT = dedent(
 
     Article excerpt (cleaned):
     {excerpt}
-
+{revision_context_block}
     Please respond with JSON using this schema:
     {{
       "premise": string,
@@ -80,13 +86,109 @@ SCRIPT_PLANNING_PROMPT = dedent(
 )
 
 
-def render_planning_prompt(bundle: ArticleBundle, excerpt_chars: int = 1800) -> str:
+def _build_revision_context_block(
+    review: "ScriptReviewDecision | None", previous_script: ScriptPlan | None
+) -> str:
+    if not review:
+        return ""
+
+    sections: list[str] = []
+    review_lines = [
+        "Revision context:",
+        "The previous script attempt was rejected. Deliver a revised plan that resolves every concern and follows each action item.",
+        f"Reviewer verdict: {review.verdict}",
+    ]
+    if review.summary:
+        review_lines.append(f"Reviewer summary: {review.summary}")
+    if review.strengths:
+        review_lines.append("Retain these strengths when possible:")
+        review_lines.extend(f"- {item}" for item in review.strengths)
+    if review.concerns:
+        review_lines.append("Blocking concerns to fix:")
+        review_lines.extend(f"- {item}" for item in review.concerns)
+    if review.action_items:
+        review_lines.append("Required actions for the revision:")
+        review_lines.extend(f"- {item}" for item in review.action_items)
+    sections.append("\n".join(review_lines))
+
+    if previous_script:
+        script_payload = previous_script.model_dump(mode="json")
+        script_json = json.dumps(script_payload, indent=2)
+        sections.append("Previous script attempt (JSON):\n" + indent(script_json, "  "))
+
+    block = "\n\n".join(sections)
+    return "\n" + block + "\n\n"
+
+
+def render_planning_prompt(
+    bundle: ArticleBundle,
+    excerpt_chars: int = 1800,
+    review: "ScriptReviewDecision | None" = None,
+    previous_script: ScriptPlan | None = None,
+) -> str:
     article = bundle.article
     excerpt = article.text[:excerpt_chars]
+    revision_context_block = _build_revision_context_block(review, previous_script)
     return SCRIPT_PLANNING_PROMPT.format(
         title=article.metadata.title,
         byline=article.metadata.byline or "Unknown",
         source=article.metadata.source or "Unknown",
         published=article.metadata.published_at or "Unknown",
         excerpt=excerpt,
+        revision_context_block=revision_context_block,
+    )
+
+
+REVIEW_PROMPT_TEMPLATE = dedent(
+    """
+    You are the editorial gut-check ensuring the script plan still reflects the article's reporting.
+    Given the original article and the proposed script plan, verify that the story the script tells
+    matches the article's substance and key takeaways. Prioritize fidelity to the source over
+    stylistic polish or suspense mechanics.
+
+    Article metadata:
+    - Title: {title}
+    - Byline: {byline}
+    - Source: {source}
+    - Published: {published}
+
+    Article synopsis:
+    {synopsis}
+
+    Script plan (JSON):
+    {script_json}
+
+    Respond ONLY with JSON using this schema:
+    {{
+      "verdict": "approve" or "revise",
+      "summary": string,
+      "strengths": [string, ...],
+      "concerns": [string, ...],
+      "action_items": [string, ...]
+    }}
+
+    Rules:
+    - If the script introduces factual errors, contradicts the article, or omits the core takeaway, set "verdict" to "revise".
+    - Approve when the script captures the article's main storyline, key facts, and nuance—even if pacing or suspense could improve.
+    - Use "concerns" for each specific misalignment with the article. Mention beat ids when possible.
+    - Use "action_items" to give concrete guidance to fix the factual or contextual gaps that block approval.
+    - Keep the JSON concise; do not include explanatory prose outside the JSON object.
+    """
+)
+
+
+def render_review_prompt(
+    article: ArticleBundle, script: ScriptPlan, synopsis_chars: int = 800
+) -> str:
+    article_meta = article.article.metadata
+    synopsis = article.article.text[:synopsis_chars].strip()
+    script_payload = script.model_dump(mode="json")
+    script_json = json.dumps(script_payload, indent=2)
+    return REVIEW_PROMPT_TEMPLATE.format(
+        title=article_meta.title,
+        byline=article_meta.byline or "Unknown",
+        source=article_meta.source or "Unknown",
+        published=article_meta.published_at or "Unknown",
+        synopsis=synopsis or "Synopsis unavailable.",
+        script_json=indent(script_json, "  "),
     )

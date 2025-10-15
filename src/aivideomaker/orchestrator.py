@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import shutil
+import sys
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -15,11 +17,12 @@ from aivideomaker.article_ingest.model import ArticleBundle, slugify
 from aivideomaker.article_ingest.service import ArticleIngestor
 from aivideomaker.chunker.model import ChunkPlan
 from aivideomaker.chunker.planner import ChunkPlanner
-from aivideomaker.prompt_builder.builder import PromptBuilder
-from aivideomaker.prompt_builder.model import PromptBundle
+from aivideomaker.prompt_builder.builder import MediaPromptBuilder
+from aivideomaker.prompt_builder.model import MediaPromptBundle
 from aivideomaker.script_engine.engine import ScriptEngine
 from aivideomaker.script_engine.llm import ClaudeLLM, EchoLLM, LLMClient
 from aivideomaker.script_engine.model import ScriptPlan, SocialCaption
+from aivideomaker.script_engine.reviewer import ScriptReviewDecision, ScriptReviewer
 from aivideomaker.media_pipeline.elevenlabs_client import ElevenLabsClient
 from aivideomaker.media_pipeline.sora_client import SoraClient
 from aivideomaker.media_pipeline.veo_client import VeoClient
@@ -32,6 +35,10 @@ if _dotenv_path:
     load_dotenv(_dotenv_path, override=False)
 
 logger = logging.getLogger(__name__)
+
+
+class ScriptRejectedError(RuntimeError):
+    """Raised when a script is rejected and the pipeline should halt gracefully."""
 
 
 class PipelineConfig(BaseModel):
@@ -58,6 +65,8 @@ class PipelineConfig(BaseModel):
     music_force_instrumental: bool = True
     music_output_format: str = "mp3_44100_128"
     music_request_timeout: float = 120.0
+    enable_script_review: bool = True
+    require_human_approval: bool = True
     # Sora configuration
     sora_model: str = "sora-2"
     sora_size: str = "720x1280"
@@ -112,8 +121,9 @@ class PipelineConfig(BaseModel):
 class PipelineBundle(BaseModel):
     article: ArticleBundle
     script: ScriptPlan
+    script_review: ScriptReviewDecision | None = None
     chunks: ChunkPlan
-    prompts: PromptBundle
+    prompts: MediaPromptBundle
     sora_assets: list[Path]
     voice_transcript: Optional[Path]
     narration_audio: Optional[Path] = None
@@ -122,6 +132,8 @@ class PipelineBundle(BaseModel):
     music_track: Optional[Path] = None
     social_caption_path: Optional[Path] = None
     final_video: Optional[Path]
+    script_greenlit: bool = True
+    human_approval: Optional[bool] = None
 
 
 @dataclass
@@ -129,8 +141,9 @@ class PipelineOrchestrator:
     config: PipelineConfig
     article_ingestor: ArticleIngestor
     script_engine: ScriptEngine
+    script_reviewer: ScriptReviewer
     chunk_planner: ChunkPlanner
-    prompt_builder: PromptBuilder
+    prompt_builder: MediaPromptBuilder
     media_client: SoraClient | VeoClient
     voice_manager: VoiceSessionManager
     music_client: ElevenLabsMusicClient | None
@@ -220,12 +233,15 @@ class PipelineOrchestrator:
                     config.music_api_key_env,
                 )
 
+        llm_client = config.build_llm()
+
         return cls(
             config=config,
             article_ingestor=ArticleIngestor(),
-            script_engine=ScriptEngine(llm=config.build_llm()),
+            script_engine=ScriptEngine(llm=llm_client),
+            script_reviewer=ScriptReviewer(llm=llm_client),
             chunk_planner=ChunkPlanner(),
-            prompt_builder=PromptBuilder(
+            prompt_builder=MediaPromptBuilder(
                 default_voice=config.voice_id,
                 negative_prompt=config.negative_prompt,
             ),
@@ -265,12 +281,60 @@ class PipelineOrchestrator:
         filename_base = article.slug
         article_title = article.article.metadata.title
 
-        logger.info("Generating suspenseful script")
-        script = self.script_engine.generate_script(article)
+        review_decision: ScriptReviewDecision | None = None
+        pending_review_feedback: ScriptReviewDecision | None = None
+        previous_script_attempt: ScriptPlan | None = None
+        script_greenlit = not self.config.enable_script_review
+        human_approval: bool | None = None
+        while True:
+            logger.info("Generating suspenseful script")
+            script = self.script_engine.generate_script(
+                article,
+                review=pending_review_feedback,
+                previous_script=previous_script_attempt if pending_review_feedback else None,
+            )
+
+            review_decision = None
+            if self.config.enable_script_review:
+                review_decision = self.script_reviewer.review(article, script)
+                script_greenlit = not review_decision.requires_revision
+                if review_decision.requires_revision:
+                    message = self._format_review_failure(review_decision)
+                    print(f"\n{message}\n")
+                    if self._should_regenerate_script(
+                        "Automated reviewer did not approve the script. Generate again? (y/n): "
+                    ):
+                        previous_script_attempt = script
+                        pending_review_feedback = review_decision
+                        continue
+                    pending_review_feedback = None
+                    previous_script_attempt = script
+                    break
+                pending_review_feedback = None
+            else:
+                script_greenlit = True
+                pending_review_feedback = None
+
+            if self.config.require_human_approval and not prompts_only:
+                approved = self._require_human_approval(script, review_decision)
+                if not approved:
+                    if self._should_regenerate_script(
+                        "Human reviewer rejected the script. Generate again? (y/n): "
+                    ):
+                        previous_script_attempt = script
+                        continue
+                    script_greenlit = False
+                human_approval = approved
+            elif self.config.require_human_approval:
+                logger.info("Prompts-only mode active; skipping human approval gate.")
+                human_approval = None
+            previous_script_attempt = script
+            break
 
         narration_asset: NarrationAsset | None = None
         alignment_payload: dict | None = None
-        if not prompts_only and self.voice_manager.eleven_client:
+        allow_media_generation = script_greenlit and not prompts_only
+        if allow_media_generation and self.voice_manager.eleven_client:
             voice_id = self.config.narration_voice_id or self.config.voice_id
             narration_asset = self.voice_manager.prepare_voice(
                 script_text=script.full_transcript,
@@ -290,7 +354,7 @@ class PipelineOrchestrator:
 
         music_path: Path | None = None
         if (
-            not prompts_only
+            allow_media_generation
             and self.music_client
             and self.config.use_music
             and not dry_run
@@ -315,6 +379,7 @@ class PipelineOrchestrator:
         base_bundle = PipelineBundle(
             article=article,
             script=script,
+            script_review=review_decision,
             chunks=chunks,
             prompts=prompts,
             sora_assets=[],
@@ -325,12 +390,15 @@ class PipelineOrchestrator:
             music_track=music_path,
             social_caption_path=caption_path,
             final_video=None,
+            script_greenlit=script_greenlit,
+            human_approval=human_approval,
         )
+        effective_prompts_only = prompts_only or not script_greenlit
         return self.execute_prompts(
             bundle=base_bundle,
             output_dir=output_dir,
             dry_run=dry_run,
-            prompts_only=prompts_only,
+            prompts_only=effective_prompts_only,
             cleanup=False,
         )
 
@@ -342,6 +410,94 @@ class PipelineOrchestrator:
             f"Suspenseful investigative score with gradual build, supporting a story about {article.article.metadata.title}. "
             f"Mood cues: {mood}."
         )
+
+    def _format_review_failure(self, decision: ScriptReviewDecision) -> str:
+        lines = [
+            "Script failed automated review and cannot proceed to media generation.",
+            f"Verdict: {decision.verdict}",
+        ]
+        if decision.summary:
+            lines.append(f"Summary: {decision.summary}")
+        if decision.concerns:
+            lines.append("Concerns:")
+            lines.extend(f"  - {item}" for item in decision.concerns)
+        if decision.action_items:
+            lines.append("Action items:")
+            lines.extend(f"  - {item}" for item in decision.action_items)
+        return "\n".join(lines)
+
+    def _require_human_approval(
+        self,
+        script: ScriptPlan,
+        decision: ScriptReviewDecision | None,
+    ) -> bool:
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                "Human approval is required but no interactive terminal was detected. "
+                "Disable `require_human_approval` in the pipeline config or run from an interactive shell."
+            )
+
+        logger.info("Awaiting human approval for the generated script.")
+
+        print("\n=== Automated Review Summary ===")
+        if decision:
+            print(f"Verdict: {decision.verdict}")
+            if decision.summary:
+                print(f"Summary: {decision.summary}")
+            if decision.strengths:
+                print("\nStrengths:")
+                for item in decision.strengths:
+                    print(f"- {item}")
+            if decision.concerns:
+                print("\nConcerns:")
+                for item in decision.concerns:
+                    print(f"- {item}")
+            if decision.action_items:
+                print("\nAction Items:")
+                for item in decision.action_items:
+                    print(f"- {item}")
+        else:
+            print("Automated review disabled; proceeding directly to human approval.")
+
+        print("\n=== Script Premise ===")
+        print(script.premise.strip())
+
+        print("\n=== Full Script ===")
+        for idx, beat in enumerate(script.beats, start=1):
+            header = f"[Beat {idx}] {beat.id} | {beat.purpose} | ~{beat.estimated_duration_sec:.1f}s | Suspense {beat.suspense_level}"
+            print(header)
+            print(textwrap.fill(beat.transcript.strip(), width=100))
+            if beat.audio_mood or beat.visual_seed:
+                cues: list[str] = []
+                if beat.visual_seed:
+                    cues.append(f"Visual: {beat.visual_seed}")
+                if beat.audio_mood:
+                    cues.append(f"Audio: {beat.audio_mood}")
+                print("  " + " | ".join(cues))
+            print("")
+
+        print("=== End of Script ===\n")
+
+        while True:
+            response = input("Approve the script for media generation? (y/n): ").strip().lower()
+            if response in {"y", "yes"}:
+                return True
+            if response in {"n", "no"}:
+                return False
+            print("Please respond with 'y' or 'n'.")
+
+    def _should_regenerate_script(self, prompt: str) -> bool:
+        if not sys.stdin.isatty():
+            logger.warning("Cannot prompt for regeneration without an interactive terminal.")
+            return False
+
+        while True:
+            response = input(prompt).strip().lower()
+            if response in {"y", "yes"}:
+                return True
+            if response in {"n", "no"}:
+                return False
+            print("Please respond with 'y' or 'n'.")
 
     def _prepare_run_environment(self, slug: str, output_dir: Path, cleanup: bool) -> dict[str, Path]:
         run_dir = output_dir / slug
@@ -432,7 +588,7 @@ class PipelineOrchestrator:
 
     def _collect_existing_assets(self, bundle: PipelineBundle, sora_dir: Path) -> list[Path]:
         assets: list[Path] = []
-        for prompt in bundle.prompts.sora_prompts:
+        for prompt in bundle.prompts.media_prompts:
             clip_path = sora_dir / f"{prompt.chunk_id}.mp4"
             if not clip_path.exists():
                 raise RuntimeError(f"Missing clip for stitch-only mode: {clip_path}")
@@ -539,11 +695,11 @@ class PipelineOrchestrator:
                     )
                 submit_dry_run = not real_sora
                 logger.info("Submitting prompts to Sora (dry_run=%s)", submit_dry_run)
-                media_assets = self.media_client.submit_prompts(prompts.sora_prompts, dry_run=submit_dry_run)
+                media_assets = self.media_client.submit_prompts(prompts.media_prompts, dry_run=submit_dry_run)
             elif provider == "veo":
                 if dry_run:
                     logger.info("Dry run: skipping Veo submission")
-                    media_assets = self.media_client.submit_prompts(prompts.sora_prompts, dry_run=True)
+                    media_assets = self.media_client.submit_prompts(prompts.media_prompts, dry_run=True)
                 else:
                     has_key = bool(getattr(self.media_client, "api_key", None))
                     uses_vertex = bool(getattr(self.media_client, "use_vertex", False))
@@ -552,7 +708,7 @@ class PipelineOrchestrator:
                             f"Missing Veo API key. Set {self.config.veo_api_key_env} in your environment."
                         )
                     logger.info("Submitting prompts to Veo model %s", self.config.veo_model)
-                    media_assets = self.media_client.submit_prompts(prompts.sora_prompts, dry_run=False)
+                    media_assets = self.media_client.submit_prompts(prompts.media_prompts, dry_run=False)
             else:
                 raise ValueError(f"Unsupported media_provider '{self.config.media_provider}'")
 

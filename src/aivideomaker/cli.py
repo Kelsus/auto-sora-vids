@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .orchestrator import PipelineBundle, PipelineOrchestrator
+from .orchestrator import PipelineBundle, PipelineOrchestrator, ScriptRejectedError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,14 +78,18 @@ def main() -> None:
     else:
         if not args.url:
             parser.error("Either a URL or --prompt-bundle must be provided")
-        bundle = orchestrator.run(
-            article_url=args.url,
-            output_dir=args.output_dir,
-            dry_run=args.dry_run,
-            prompts_only=args.prompts_only,
-            cleanup=args.cleanup,
-            stitch_only=args.stitch_only,
-        )
+        try:
+            bundle = orchestrator.run(
+                article_url=args.url,
+                output_dir=args.output_dir,
+                dry_run=args.dry_run,
+                prompts_only=args.prompts_only,
+                cleanup=args.cleanup,
+                stitch_only=args.stitch_only,
+            )
+        except ScriptRejectedError as exc:
+            print(str(exc))
+            return
 
     run_dir = (args.output_dir / bundle.article.slug)
     run_dir.mkdir(parents=True, exist_ok=True)

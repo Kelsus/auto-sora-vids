@@ -11,7 +11,7 @@ class VoiceDirective(BaseModel):
     notes: Optional[str] = None
 
 
-class SoraPrompt(BaseModel):
+class MediaPrompt(BaseModel):
     chunk_id: str
     transcript: str
     visual_prompt: str
@@ -21,7 +21,7 @@ class SoraPrompt(BaseModel):
     cameo_voice: Optional[VoiceDirective] = None
 
 
-class PromptBundle(BaseModel):
+class MediaPromptBundle(BaseModel):
     article_slug: str
-    sora_prompts: List[SoraPrompt]
+    media_prompts: List[MediaPrompt]
     voice_session: Optional[str] = None

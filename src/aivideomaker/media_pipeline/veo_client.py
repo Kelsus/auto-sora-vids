@@ -23,7 +23,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency for Vertex downloads
     storage = None  # type: ignore[assignment]
 
-from aivideomaker.prompt_builder.model import SoraPrompt
+from aivideomaker.prompt_builder.model import MediaPrompt
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +89,9 @@ class VeoClient:
         self._asset_dir.mkdir(parents=True, exist_ok=True)
         return self._asset_dir
 
-    def submit_prompts(self, prompts: Iterable[SoraPrompt], dry_run: bool = True) -> list[Path]:
+    def submit_prompts(self, prompts: Iterable[MediaPrompt], dry_run: bool = True) -> list[Path]:
         assets: list[Path] = []
-        pending: Deque[Tuple[SoraPrompt, types.GenerateVideosOperation, Path]] = deque()
+        pending: Deque[Tuple[MediaPrompt, types.GenerateVideosOperation, Path]] = deque()
         asset_dir = self._require_asset_dir()
         for prompt in prompts:
             target = asset_dir / f"{prompt.chunk_id}.mp4"
@@ -111,7 +111,7 @@ class VeoClient:
 
     # Internal helpers -------------------------------------------------
 
-    def _safe_duration(self, prompt: SoraPrompt) -> int:
+    def _safe_duration(self, prompt: MediaPrompt) -> int:
         # Veo supports 4, 6, or 8 second outputs; choose the smallest allowed duration
         # that can accommodate the requested length.
         approx = max(4.0, min(8.0, float(prompt.duration_sec or 8)))
@@ -120,14 +120,14 @@ class VeoClient:
                 return candidate
         return 8
 
-    def _compose_prompt(self, prompt: SoraPrompt) -> str:
+    def _compose_prompt(self, prompt: MediaPrompt) -> str:
         segments = [prompt.visual_prompt]
         segments.append(f"Audio direction: {prompt.audio_prompt}.")
         if prompt.negative_prompt:
             segments.append(f"Avoid: {prompt.negative_prompt}.")
         return "\n".join(segment for segment in segments if segment)
 
-    def _create_job(self, prompt: SoraPrompt) -> types.GenerateVideosOperation:
+    def _create_job(self, prompt: MediaPrompt) -> types.GenerateVideosOperation:
         if not self.client:
             raise RuntimeError("Veo API client not configured")
 
@@ -182,7 +182,7 @@ class VeoClient:
 
     def _complete_next(
         self,
-        pending: Deque[Tuple[SoraPrompt, types.GenerateVideosOperation, Path]],
+        pending: Deque[Tuple[MediaPrompt, types.GenerateVideosOperation, Path]],
         assets: list[Path],
     ) -> None:
         prompt, operation, target = pending.popleft()

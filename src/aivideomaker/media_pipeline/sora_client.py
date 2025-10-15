@@ -10,7 +10,7 @@ import requests
 import random
 import re
 
-from aivideomaker.prompt_builder.model import SoraPrompt
+from aivideomaker.prompt_builder.model import MediaPrompt
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class SoraClient:
         self._asset_dir.mkdir(parents=True, exist_ok=True)
         return self._asset_dir
 
-    def submit_prompts(self, prompts: Iterable[SoraPrompt], dry_run: bool = True) -> list[Path]:
+    def submit_prompts(self, prompts: Iterable[MediaPrompt], dry_run: bool = True) -> list[Path]:
         assets: list[Path] = []
         asset_dir = self._require_asset_dir()
         for prompt in prompts:
@@ -100,14 +100,14 @@ class SoraClient:
             "Content-Type": "application/json",
         }
 
-    def _safe_duration(self, prompt: SoraPrompt) -> int:
+    def _safe_duration(self, prompt: MediaPrompt) -> int:
         desired = float(prompt.duration_sec or 8)
         for candidate in (4, 8, 12):
             if desired <= candidate:
                 return candidate
         return 12
 
-    def _compose_prompt(self, prompt: SoraPrompt, negative_prompt: str | None) -> str:
+    def _compose_prompt(self, prompt: MediaPrompt, negative_prompt: str | None) -> str:
         parts = [
             prompt.visual_prompt,
             "Ensure visuals align with the voiceover narration without showing text or captions.",
@@ -117,7 +117,7 @@ class SoraClient:
             parts.append(f"Avoid: {negative_prompt}.")
         return "\n".join(parts)
 
-    def _create_job_with_retry(self, prompt: SoraPrompt, retries: int = 3, backoff: float = 5.0) -> dict:
+    def _create_job_with_retry(self, prompt: MediaPrompt, retries: int = 3, backoff: float = 5.0) -> dict:
         last_error: Exception | None = None
         for attempt in range(1, retries + 1):
             try:
@@ -144,7 +144,7 @@ class SoraClient:
             raise last_error
         raise SoraJobError("Failed to create Sora job")
 
-    def _create_job(self, prompt: SoraPrompt) -> dict:
+    def _create_job(self, prompt: MediaPrompt) -> dict:
         payload = {
             "model": self.model,
             "prompt": self._compose_prompt(prompt, prompt.negative_prompt),

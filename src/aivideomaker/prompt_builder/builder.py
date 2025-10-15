@@ -4,10 +4,10 @@ from aivideomaker.article_ingest.model import ArticleBundle
 from aivideomaker.chunker.model import ChunkPlan
 from aivideomaker.script_engine.model import ScriptPlan
 
-from .model import PromptBundle, SoraPrompt, VoiceDirective
+from .model import MediaPrompt, MediaPromptBundle, VoiceDirective
 
 
-class PromptBuilder:
+class MediaPromptBuilder:
     def __init__(
         self,
         default_voice: str | None = None,
@@ -16,9 +16,9 @@ class PromptBuilder:
         self.default_voice = default_voice
         self.negative_prompt = negative_prompt
 
-    def build(self, article: ArticleBundle, script: ScriptPlan, chunks: ChunkPlan) -> PromptBundle:
+    def build(self, article: ArticleBundle, script: ScriptPlan, chunks: ChunkPlan) -> MediaPromptBundle:
         beat_map = {beat.id: beat for beat in script.beats}
-        sora_prompts = []
+        media_prompts = []
         for chunk in chunks.chunks:
             beat = beat_map[chunk.beat_id]
             visual_prompt = self._visual_prompt(article, beat.purpose, beat.visual_seed)
@@ -28,8 +28,8 @@ class PromptBuilder:
                 if self.default_voice
                 else None
             )
-            sora_prompts.append(
-                SoraPrompt(
+            media_prompts.append(
+                MediaPrompt(
                     chunk_id=getattr(chunk, "id", chunk.beat_id),
                     transcript=chunk.transcript,
                     visual_prompt=visual_prompt,
@@ -39,7 +39,7 @@ class PromptBuilder:
                     cameo_voice=voice_directive,
                 )
             )
-        return PromptBundle(article_slug=article.article.metadata.slug, sora_prompts=sora_prompts)
+        return MediaPromptBundle(article_slug=article.article.metadata.slug, media_prompts=media_prompts)
 
     def _visual_prompt(self, article: ArticleBundle, purpose: str, seed: str | None) -> str:
         base = f"News story about {article.article.metadata.title}." if article.article.metadata.title else "Contemporary news setting."
