@@ -5,6 +5,7 @@ Pipeline for turning news articles into suspenseful, controversy-led video scrip
 ## Features (MVP)
 - Fetches and cleans article content from a URL.
 - Converts PDF reports to plain text before downstream processing.
+- Repairs minor JSON formatting issues returned by the LLM before validation.
 - Crafts a multi-beat script that delays context for maximum tension (LLM-backed, pluggable).
 - Segments beats into Sora-sized clips with estimated durations and suspense metadata.
 - Outputs structured prompts including transcript, visual direction, audio guidance, and voice directives.

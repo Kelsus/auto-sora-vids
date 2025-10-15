@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Any
 
+from json_repair import repair_json
 from pydantic import ValidationError
 
 from aivideomaker.article_ingest.model import ArticleBundle
@@ -24,11 +25,18 @@ class ScriptEngine:
         raw = self.llm.complete(prompt)
         logger.debug("LLM raw response: %s", raw)
         cleaned = _extract_json_block(raw)
+
         try:
-            payload: dict[str, Any] = json.loads(cleaned)
+            payload = json.loads(cleaned)
         except json.JSONDecodeError as exc:
-            logger.error("Failed to parse LLM JSON: %s", exc)
-            raise
+            logger.warning("Primary JSON parse failed, attempting repair: %s", exc)
+            try:
+                repaired = repair_json(cleaned)
+                payload = json.loads(repaired)
+            except Exception as repair_exc:
+                logger.error("JSON repair failed: %s", repair_exc)
+                raise exc from repair_exc
+
         try:
             return ScriptPlan.model_validate(payload)
         except ValidationError as exc:
