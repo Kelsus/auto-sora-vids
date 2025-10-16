@@ -507,16 +507,19 @@ class PipelineOrchestrator:
         scripts_dir = run_dir
         media_dir = run_dir / "media"
         sora_dir = media_dir / "sora_clips"
+        veo_dir = media_dir / "veo_clips"
         voice_dir = media_dir / "voice"
         music_dir = media_dir / "music"
         export_dir = run_dir / "exports"
 
-        for path in (sora_dir, voice_dir, music_dir, export_dir):
+        for path in (sora_dir, veo_dir, voice_dir, music_dir, export_dir):
             path.mkdir(parents=True, exist_ok=True)
 
         # Update client destinations to new per-run directories
         if isinstance(self.media_client, SoraClient):
             self.media_client.asset_dir = sora_dir
+        elif isinstance(self.media_client, VeoClient):
+            self.media_client.asset_dir = veo_dir
         if self.voice_manager:
             self.voice_manager.base_dir = voice_dir
         if self.music_client:
@@ -528,6 +531,7 @@ class PipelineOrchestrator:
             "run_dir": run_dir,
             "scripts_dir": scripts_dir,
             "sora_dir": sora_dir,
+            "veo_dir": veo_dir,
             "voice_dir": voice_dir,
             "music_dir": music_dir,
             "export_dir": export_dir,
