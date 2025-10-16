@@ -114,7 +114,7 @@ class PipelineConfig(BaseModel):
                 )
             client = Anthropic(api_key=api_key)
             return ClaudeLLM(client=client, model=self.llm_model)
-        logger.warning("Unknown llm_provider '%s'; falling back to EchoLLM", provider)
+        logger.warning("⚠️  Unknown llm_provider '%s'; falling back to EchoLLM", provider)
         return EchoLLM()
 
 
@@ -205,10 +205,10 @@ class PipelineOrchestrator:
                         audio_format=config.narration_audio_format,
                     )
                 except ValueError as exc:
-                    logger.error("Failed to initialize ElevenLabs client: %s", exc)
+                    logger.error("💥  Failed to initialize ElevenLabs client: %s", exc)
             else:
                 logger.warning(
-                    "Narration voice configured but no ElevenLabs API key found in %s",
+                    "⚠️  Narration voice configured but no ElevenLabs API key found in %s",
                     config.elevenlabs_api_key_env,
                 )
 
@@ -226,10 +226,10 @@ class PipelineOrchestrator:
                         request_timeout=config.music_request_timeout,
                     )
                 except ValueError as exc:
-                    logger.error("Failed to initialize ElevenLabs music client: %s", exc)
+                    logger.error("💥  Failed to initialize ElevenLabs music client: %s", exc)
             else:
                 logger.warning(
-                    "Music generation enabled but no ElevenLabs API key found in %s",
+                    "⚠️  Music generation enabled but no ElevenLabs API key found in %s",
                     config.music_api_key_env,
                 )
 
@@ -275,7 +275,7 @@ class PipelineOrchestrator:
                 stitch_only=True,
             )
 
-        logger.info("Ingesting article: %s", article_url)
+        logger.info("📰  Ingesting article: %s", article_url)
         article = self.article_ingestor.ingest(article_url)
         run_dirs = self._prepare_run_environment(article.slug, output_dir, cleanup)
         filename_base = article.slug
@@ -287,7 +287,7 @@ class PipelineOrchestrator:
         script_greenlit = not self.config.enable_script_review
         human_approval: bool | None = None
         while True:
-            logger.info("Generating suspenseful script")
+            logger.info("✍️  Generating suspenseful script")
             script = self.script_engine.generate_script(
                 article,
                 review=pending_review_feedback,
@@ -326,7 +326,7 @@ class PipelineOrchestrator:
                     script_greenlit = False
                 human_approval = approved
             elif self.config.require_human_approval:
-                logger.info("Prompts-only mode active; skipping human approval gate.")
+                logger.info("🚦  Prompts-only mode active; skipping human approval gate.")
                 human_approval = None
             previous_script_attempt = script
             break
@@ -367,13 +367,13 @@ class PipelineOrchestrator:
                     title=article.article.metadata.title,
                 )
             except Exception as exc:  # pragma: no cover - API failure path
-                logger.error("Failed to generate ElevenLabs music track: %s", exc)
+                logger.error("💥  Failed to generate ElevenLabs music track: %s", exc)
                 music_path = None
 
-        logger.info("Planning Veo-sized segments")
+        logger.info("🧩  Planning Veo-sized segments")
         chunks = self.chunk_planner.plan(script, alignment=alignment_payload)
 
-        logger.info("Building structured prompts")
+        logger.info("🛠️  Building structured prompts")
         prompts = self.prompt_builder.build(article, script, chunks)
 
         base_bundle = PipelineBundle(
@@ -437,7 +437,7 @@ class PipelineOrchestrator:
                 "Disable `require_human_approval` in the pipeline config or run from an interactive shell."
             )
 
-        logger.info("Awaiting human approval for the generated script.")
+        logger.info("🧑‍⚖️  Awaiting human approval for the generated script.")
 
         print("\n=== Automated Review Summary ===")
         if decision:
@@ -488,7 +488,7 @@ class PipelineOrchestrator:
 
     def _should_regenerate_script(self, prompt: str) -> bool:
         if not sys.stdin.isatty():
-            logger.warning("Cannot prompt for regeneration without an interactive terminal.")
+            logger.warning("⚠️  Cannot prompt for regeneration without an interactive terminal.")
             return False
 
         while True:
@@ -651,7 +651,7 @@ class PipelineOrchestrator:
                 alignment_payload=bundle.narration_alignment_payload,
             )
         elif not prompts_only:
-            logger.info("Preparing narration audio")
+            logger.info("🎙️  Preparing narration audio")
             script_text = bundle.script.full_transcript
             voice_id = self.config.narration_voice_id or self.config.voice_id
             if script_text.strip() and self.voice_manager.eleven_client:
@@ -661,7 +661,7 @@ class PipelineOrchestrator:
                     dry_run=dry_run,
                 )
             else:
-                logger.warning("Narration synthesis skipped (missing text or ElevenLabs client)")
+                logger.warning("⚠️  Narration synthesis skipped (missing text or ElevenLabs client)")
 
         if (
             self.music_client
@@ -678,11 +678,11 @@ class PipelineOrchestrator:
                     title=bundle.article.article.metadata.title,
                 )
             except Exception as exc:
-                logger.error("Failed to generate ElevenLabs music track during execution: %s", exc)
+                logger.error("💥  Failed to generate ElevenLabs music track during execution: %s", exc)
 
         provider = self.config.media_provider.lower()
         if prompts_only:
-            logger.info("Prompts-only mode: skipping media submission")
+            logger.info("🚧  Prompts-only mode: skipping media submission")
             media_assets: list[Path] = []
         elif stitch_only:
             media_assets = self._collect_existing_assets(bundle, run_dirs["sora_dir"])
@@ -694,11 +694,11 @@ class PipelineOrchestrator:
                         f"Missing Sora API key. Set {self.config.sora_api_key_env} in your environment."
                     )
                 submit_dry_run = not real_sora
-                logger.info("Submitting prompts to Sora (dry_run=%s)", submit_dry_run)
+                logger.info("🎬  Submitting prompts to Sora (dry_run=%s)", submit_dry_run)
                 media_assets = self.media_client.submit_prompts(prompts.media_prompts, dry_run=submit_dry_run)
             elif provider == "veo":
                 if dry_run:
-                    logger.info("Dry run: skipping Veo submission")
+                    logger.info("🧪  Dry run: skipping Veo submission")
                     media_assets = self.media_client.submit_prompts(prompts.media_prompts, dry_run=True)
                 else:
                     has_key = bool(getattr(self.media_client, "api_key", None))
@@ -707,7 +707,7 @@ class PipelineOrchestrator:
                         raise RuntimeError(
                             f"Missing Veo API key. Set {self.config.veo_api_key_env} in your environment."
                         )
-                    logger.info("Submitting prompts to Veo model %s", self.config.veo_model)
+                    logger.info("🎬  Submitting prompts to Veo model %s", self.config.veo_model)
                     media_assets = self.media_client.submit_prompts(prompts.media_prompts, dry_run=False)
             else:
                 raise ValueError(f"Unsupported media_provider '{self.config.media_provider}'")
@@ -740,7 +740,7 @@ class PipelineOrchestrator:
             )
         else:
             reason = "prompts-only mode" if prompts_only else "dry run or no assets"
-            logger.info("Skipping stitching (%s)", reason)
+            logger.info("⏭️  Skipping stitching (%s)", reason)
 
         output_dir.mkdir(parents=True, exist_ok=True)
         return bundle.model_copy(

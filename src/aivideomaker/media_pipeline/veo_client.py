@@ -89,24 +89,73 @@ class VeoClient:
         self._asset_dir.mkdir(parents=True, exist_ok=True)
         return self._asset_dir
 
+    def _progress_snapshot(self, completed: int, total: int, width: int = 20) -> str:
+        total = max(1, total)
+        width = max(4, width)
+        completed = max(0, min(completed, total))
+        filled = int(round((completed / total) * width))
+        filled = min(filled, width)
+        bar = "=" * filled + "." * (width - filled)
+        return f"[{bar}] {completed}/{total}"
+
     def submit_prompts(self, prompts: Iterable[MediaPrompt], dry_run: bool = True) -> list[Path]:
+        prompt_list = list(prompts)
+        total = len(prompt_list)
         assets: list[Path] = []
+
+        if total == 0:
+            logger.info("📭  No Veo prompts to process.")
+            return assets
+
+        logger.info("")
+        logger.info("🎬  Starting Veo processing for %d prompt%s.", total, "" if total == 1 else "s")
+        logger.info("")
+
         pending: Deque[Tuple[MediaPrompt, types.GenerateVideosOperation, Path]] = deque()
         asset_dir = self._require_asset_dir()
-        for prompt in prompts:
+        completed = 0
+        submitted = 0
+
+        for prompt in prompt_list:
             target = asset_dir / f"{prompt.chunk_id}.mp4"
             if dry_run or not self.client:
-                logger.info("Veo dry run: creating placeholder for %s", prompt.chunk_id)
+                logger.info(
+                    "🧪  %s  Dry-run placeholder created for chunk %s → %s",
+                    self._progress_snapshot(completed, total),
+                    prompt.chunk_id,
+                    target,
+                )
                 target.touch()
                 assets.append(target)
+                completed += 1
+                logger.info(
+                    "✅  %s  Dry-run marked chunk %s as complete.",
+                    self._progress_snapshot(completed, total),
+                    prompt.chunk_id,
+                )
                 continue
-            logger.info("Submitting Veo job for %s", prompt.chunk_id)
+
+            submitted += 1
+            logger.info(
+                "🚀  %s  Submitting chunk %s (%d/%d) to Veo.",
+                self._progress_snapshot(completed, total),
+                prompt.chunk_id,
+                submitted,
+                total,
+            )
             operation = self._create_job(prompt)
             pending.append((prompt, operation, target))
             if len(pending) >= self.max_concurrent_requests:
-                self._complete_next(pending, assets)
+                completed = self._complete_next(pending, assets, total, completed)
         while pending:
-            self._complete_next(pending, assets)
+            completed = self._complete_next(pending, assets, total, completed)
+
+        logger.info("")
+        logger.info(
+            "🏁  %s  Finished processing all Veo chunks.",
+            self._progress_snapshot(completed, total),
+        )
+        logger.info("")
         return assets
 
     # Internal helpers -------------------------------------------------
@@ -184,13 +233,26 @@ class VeoClient:
         self,
         pending: Deque[Tuple[MediaPrompt, types.GenerateVideosOperation, Path]],
         assets: list[Path],
-    ) -> None:
+        total: int,
+        completed: int,
+    ) -> int:
         prompt, operation, target = pending.popleft()
-        logger.debug("Awaiting Veo operation for %s", prompt.chunk_id)
+        logger.info(
+            "⏳  %s  Waiting for Veo render of chunk %s…",
+            self._progress_snapshot(completed, total),
+            prompt.chunk_id,
+        )
         response = self._poll_until_complete(operation)
         self._save_video(response, target)
         assets.append(target)
-        logger.info("Saved Veo clip for %s at %s", prompt.chunk_id, target)
+        completed += 1
+        logger.info(
+            "✅  %s  Chunk %s ready → saved to %s",
+            self._progress_snapshot(completed, total),
+            prompt.chunk_id,
+            target,
+        )
+        return completed
 
     def _save_video(self, response: types.GenerateVideosResponse, target: Path) -> None:
         if not self.client:

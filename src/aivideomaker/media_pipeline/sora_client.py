@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 import requests
 import random
@@ -13,6 +13,8 @@ import re
 from aivideomaker.prompt_builder.model import MediaPrompt
 
 logger = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[str, MediaPrompt, int, int, str], None]
 
 
 class SoraJobError(RuntimeError):
@@ -60,21 +62,85 @@ class SoraClient:
         self._asset_dir.mkdir(parents=True, exist_ok=True)
         return self._asset_dir
 
-    def submit_prompts(self, prompts: Iterable[MediaPrompt], dry_run: bool = True) -> list[Path]:
+    def _progress_snapshot(self, completed: int, total: int, width: int = 20) -> str:
+        total = max(1, total)
+        width = max(4, width)
+        completed = max(0, min(completed, total))
+        filled = int(round((completed / total) * width))
+        filled = min(filled, width)
+        bar = "=" * filled + "." * (width - filled)
+        return f"[{bar}] {completed}/{total}"
+
+    def _emoji_for_event(self, event: str) -> str:
+        return {
+            "cached": "📦",
+            "dry_run": "🧪",
+            "submit": "🚀",
+            "accepted": "📬",
+            "status": "🔄",
+            "completed": "✅",
+            "error": "❌",
+        }.get(event, "🎞️")
+
+    def submit_prompts(
+        self,
+        prompts: Iterable[MediaPrompt],
+        dry_run: bool = True,
+        progress_callback: ProgressCallback | None = None,
+    ) -> list[Path]:
+        prompt_list = list(prompts)
+        total = len(prompt_list)
         assets: list[Path] = []
         asset_dir = self._require_asset_dir()
-        for prompt in prompts:
+        if total == 0:
+            logger.info("📭  No Sora prompts to submit.")
+            return assets
+
+        logger.info("")
+        logger.info("🎥  Starting Sora processing for %d prompt%s.", total, "" if total == 1 else "s")
+        logger.info("")
+
+        completed = 0
+        for index, prompt in enumerate(prompt_list, start=1):
             target = asset_dir / f"{prompt.chunk_id}.mp4"
             if target.exists() and target.stat().st_size > 0:
-                logger.info("Sora asset already exists for %s; skipping", prompt.chunk_id)
+                self._emit_progress(
+                    progress_callback,
+                    "cached",
+                    prompt,
+                    index,
+                    total,
+                    f"Using cached clip at {target}",
+                    completed + 1,
+                )
                 assets.append(target)
+                completed += 1
                 continue
             if dry_run or not self.api_key:
-                logger.info("Sora dry run: skipping render for %s", prompt.chunk_id)
+                if target.exists():
+                    target.unlink()
                 target.touch()
+                self._emit_progress(
+                    progress_callback,
+                    "dry_run",
+                    prompt,
+                    index,
+                    total,
+                    "Dry run: created placeholder clip",
+                    completed + 1,
+                )
                 assets.append(target)
+                completed += 1
                 continue
-            logger.info("Submitting Sora job for %s", prompt.chunk_id)
+            self._emit_progress(
+                progress_callback,
+                "submit",
+                prompt,
+                index,
+                total,
+                "Submitting Sora job",
+                completed,
+            )
             if target.exists() and target.stat().st_size == 0:
                 target.unlink()
             self._respect_submit_cooldown()
@@ -82,12 +148,45 @@ class SoraClient:
             job_id = job.get("id")
             if not job_id:
                 raise SoraJobError(f"Sora create response missing job id: {json.dumps(job)}")
+            self._emit_progress(
+                progress_callback,
+                "accepted",
+                prompt,
+                index,
+                total,
+                f"Sora job {job_id} queued",
+                completed,
+            )
             try:
-                job = self._poll_until_complete(job_id)
+                job = self._poll_until_complete(
+                    job_id,
+                    prompt=prompt,
+                    index=index,
+                    total=total,
+                    completed=completed,
+                    progress_callback=progress_callback,
+                )
             except SoraJobError as exc:
                 raise SoraJobError(f"Chunk {prompt.chunk_id} failed: {exc}") from exc
             self._download_video(job_id, target)
+            self._emit_progress(
+                progress_callback,
+                "completed",
+                prompt,
+                index,
+                total,
+                f"Saved clip to {target}",
+                completed + 1,
+            )
             assets.append(target)
+            completed += 1
+
+        logger.info("")
+        logger.info(
+            "🏁  %s  Finished processing all Sora chunks.",
+            self._progress_snapshot(completed, total),
+        )
+        logger.info("")
         return assets
 
     # Internal helpers -------------------------------------------------
@@ -163,9 +262,19 @@ class SoraClient:
         self._respect_rate_limits(response.headers)
         return response.json()
 
-    def _poll_until_complete(self, job_id: str) -> dict:
+    def _poll_until_complete(
+        self,
+        job_id: str,
+        *,
+        prompt: MediaPrompt | None = None,
+        index: int = 0,
+        total: int = 0,
+        completed: int = 0,
+        progress_callback: ProgressCallback | None = None,
+    ) -> dict:
         start = time.monotonic()
         status_payload: dict | None = None
+        last_status: str | None = None
         while True:
             if time.monotonic() - start > self.max_wait:
                 raise TimeoutError(f"Sora job {job_id} timed out after {self.max_wait} seconds")
@@ -183,6 +292,23 @@ class SoraClient:
                 time.sleep(self.poll_interval)
                 continue
             status = status_payload.get("status")
+            if (
+                prompt is not None
+                and index > 0
+                and total > 0
+                and status
+                and status != last_status
+            ):
+                self._emit_progress(
+                    progress_callback,
+                    "status",
+                    prompt,
+                    index,
+                    total,
+                    f"Sora job {job_id} status: {status}",
+                    completed,
+                )
+                last_status = str(status)
             if status == "completed":
                 logger.info("Sora job %s completed", job_id)
                 return status_payload
@@ -250,3 +376,21 @@ class SoraClient:
             except ValueError:
                 return 0.0
         return total
+
+    def _emit_progress(
+        self,
+        progress_callback: ProgressCallback | None,
+        event: str,
+        prompt: MediaPrompt,
+        index: int,
+        total: int,
+        message: str,
+        completed: int,
+    ) -> None:
+        if progress_callback:
+            progress_callback(event, prompt, index, total, message)
+            return
+        emoji = self._emoji_for_event(event)
+        snapshot = self._progress_snapshot(completed, total if total > 0 else 1)
+        prefix = f"{emoji}  {snapshot}  {prompt.chunk_id}"
+        logger.info("%s %s", prefix, message)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -55,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     load_dotenv()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        stream=sys.stdout,
+        force=True,
+    )
     parser = build_parser()
     args = parser.parse_args()
 
