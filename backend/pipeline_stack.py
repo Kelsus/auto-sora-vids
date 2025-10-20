@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import secrets
+import string
 
 from aws_cdk import (
     DockerVolume,
@@ -8,6 +10,7 @@ from aws_cdk import (
     RemovalPolicy,
     Stack,
     Tags,
+    CfnOutput,
     aws_apigateway as apigateway,
     aws_dynamodb as dynamodb,
     aws_events as events,
@@ -162,6 +165,7 @@ class VideoAutomationStack(Stack):
             self,
             "VideoJobsApi",
             rest_api_name="Video Automation Jobs",
+            api_key_source_type=apigateway.ApiKeySourceType.HEADER,
             default_cors_preflight_options=apigateway.CorsOptions(
                 allow_methods=["POST", "OPTIONS"],
                 allow_origins=apigateway.Cors.ALL_ORIGINS,
@@ -169,7 +173,29 @@ class VideoAutomationStack(Stack):
             ),
         )
         jobs_resource = api.root.add_resource("jobs")
-        jobs_resource.add_method("POST", apigateway.LambdaIntegration(ingest_lambda))
+        jobs_integration = apigateway.LambdaIntegration(ingest_lambda)
+        jobs_resource.add_method("POST", jobs_integration, api_key_required=True)
+
+        api_key_value = self.node.try_get_context("jobsApiKey") or "".join(
+            secrets.choice(string.ascii_letters + string.digits)
+            for _ in range(40)
+        )
+        api_key_name = f"video-automation-{stage}-{self.node.addr[:8]}"
+        api_key = apigateway.ApiKey(
+            self,
+            "VideoJobsApiKey",
+            api_key_name=api_key_name,
+            description="API key required to call the video jobs ingest endpoint",
+            enabled=True,
+            value=api_key_value,
+        )
+        usage_plan = api.add_usage_plan(
+            "VideoJobsUsagePlan",
+            name=f"video-automation-{stage}",
+            throttle=apigateway.ThrottleSettings(rate_limit=10, burst_limit=2),
+        )
+        usage_plan.add_api_stage(api=api, stage=api.deployment_stage)
+        usage_plan.add_api_key(api_key)
 
         scheduler_lambda = lambda_python.PythonFunction(
             self,
@@ -352,4 +378,11 @@ class VideoAutomationStack(Stack):
                 events=[s3.EventType.OBJECT_CREATED],
                 filters=[s3.NotificationKeyFilter(prefix="jobs/final/", suffix=".mp4")],
             )
+        )
+
+        CfnOutput(
+            self,
+            "VideoJobsApiKeyOutput",
+            value=api_key_value,
+            description="API key value required by the video jobs ingest endpoint",
         )
