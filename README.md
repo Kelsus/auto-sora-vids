@@ -49,6 +49,7 @@ src/aivideomaker/
    ```
    The command writes a prompt bundle and run artifacts into `data/runs/<slug>/`, including:
    - `bundle.json` — serialized article, script, prompts, and media metadata.
+   - `exports/automated_review.json` — latest automated reviewer verdict and actionable feedback for revision.
    - `media/sora_clips/` — generated or placeholder video clips.
    - `media/voice/` — narration transcript, audio, and alignment data.
    - `media/music/` — optional music tracks (when enabled).
@@ -98,6 +99,48 @@ For a two-step workflow, run once with `--prompts-only`, review the JSON bundle,
 - Multi-voice cameo support with diarization-aware stitching.
 - Automatic distribution hooks for YouTube Shorts, TikTok, and Instagram Reels.
 - Quality gates that validate narrative tension, fact coverage, and pacing before publishing.
+
+## Serverless Orchestration (AWS CDK)
+The `infra/` directory contains an AWS CDK app that wraps the downstream pipeline in a fully serverless workflow:
+- API Gateway + Lambda endpoint to enqueue jobs in a DynamoDB table.
+- EventBridge-triggered scheduler Lambda that promotes due jobs to the Step Functions state machine.
+- Step Functions state machine coordinating prompt generation, per-clip video renders, and final stitching via the container-based Lambda worker.
+- An S3-triggered Lambda that pushes the final rendered video into Google Drive using a service account.
+- Shared Python layer (`infra/lambda_src/common_layer/`) provides DynamoDB helpers and time utilities consumed by every Lambda function.
+
+### Deploy
+1. Install CDK dependencies and bootstrap your target account/region if you have not already:
+   ```bash
+   cd infra
+   python -m venv .venv && source .venv/bin/activate
+   pip install -r requirements.txt
+   cdk bootstrap aws://<account>/<region>
+   ```
+2. Deploy the stack (pass your AWS account and region via context):
+   ```bash
+   cdk deploy --context account=<account> --context region=<region>
+   ```
+3. After deployment:
+   - Set the `GoogleDriveServiceAccountSecret` value to the raw JSON of a Drive-enabled service account (scope: `https://www.googleapis.com/auth/drive.file`).
+   - Update the `GDRIVE_FOLDER_ID` environment variable on the `GoogleDriveForwarderLambda` function with the target Drive folder ID.
+   - (Optional) Adjust the worker Lambda image (`infra/lambda_src/job_worker/Dockerfile`) to bundle codecs such as `ffmpeg` if you plan to run the pipeline end-to-end.
+4. Run the lightweight unit tests for the Lambda modules:
+   ```bash
+   pytest infra/tests
+   ```
+
+### Using the API
+Submit a job from any HTTPS client:
+```bash
+curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+        "url": "s3://my-bundles/how-generative-engine-optimization-geo-rewrites-the-rules/bundle.json",
+        "social_media": "tiktok",
+        "scheduled_datetime": "2024-08-15T21:30:00Z"
+      }'
+```
+Jobs transition `PENDING → QUEUED → RUNNING → COMPLETED/FAILED` automatically. The worker stores all run artifacts in the provisioned S3 bucket under `jobs/<jobId>/run/`, and copies the final MP4 into `jobs/final/` (which triggers the Google Drive transfer Lambda).
 
 ## Troubleshooting
 - `Missing Anthropics API key`: export `ANTHROPIC_API_KEY` or place it in a `.env` file before running the CLI.

@@ -136,6 +136,17 @@ class PipelineBundle(BaseModel):
     human_approval: Optional[bool] = None
 
 
+class PromptGenerationResult(BaseModel):
+    bundle: PipelineBundle
+    clip_ids: list[str]
+
+
+class ClipRenderResult(BaseModel):
+    bundle: PipelineBundle
+    clip_id: str
+    clip_asset: Path
+
+
 @dataclass
 class PipelineOrchestrator:
     config: PipelineConfig
@@ -255,26 +266,15 @@ class PipelineOrchestrator:
             stitcher=Stitcher(export_dir=placeholder_root / "exports"),
         )
 
-    def run(
+    def _build_initial_bundle(
         self,
         article_url: str,
         output_dir: Path,
-        dry_run: bool = True,
-        prompts_only: bool = False,
-        cleanup: bool = False,
-        stitch_only: bool = False,
+        *,
+        dry_run: bool,
+        prompts_only: bool,
+        cleanup: bool,
     ) -> PipelineBundle:
-        if stitch_only:
-            bundle = self._load_existing_bundle(article_url, output_dir)
-            return self.execute_prompts(
-                bundle=bundle,
-                output_dir=output_dir,
-                dry_run=False,
-                prompts_only=False,
-                cleanup=False,
-                stitch_only=True,
-            )
-
         logger.info("📰  Ingesting article: %s", article_url)
         article = self.article_ingestor.ingest(article_url)
         run_dirs = self._prepare_run_environment(article.slug, output_dir, cleanup)
@@ -376,7 +376,7 @@ class PipelineOrchestrator:
         logger.info("🛠️  Building structured prompts")
         prompts = self.prompt_builder.build(article, script, chunks)
 
-        base_bundle = PipelineBundle(
+        return PipelineBundle(
             article=article,
             script=script,
             script_review=review_decision,
@@ -393,13 +393,136 @@ class PipelineOrchestrator:
             script_greenlit=script_greenlit,
             human_approval=human_approval,
         )
-        effective_prompts_only = prompts_only or not script_greenlit
+
+    def run(
+        self,
+        article_url: str,
+        output_dir: Path,
+        dry_run: bool = True,
+        prompts_only: bool = False,
+        cleanup: bool = False,
+        stitch_only: bool = False,
+    ) -> PipelineBundle:
+        if stitch_only:
+            bundle = self._load_existing_bundle(article_url, output_dir)
+            return self.execute_prompts(
+                bundle=bundle,
+                output_dir=output_dir,
+                dry_run=False,
+                prompts_only=False,
+                cleanup=False,
+                stitch_only=True,
+            )
+
+        base_bundle = self._build_initial_bundle(
+            article_url=article_url,
+            output_dir=output_dir,
+            dry_run=dry_run,
+            prompts_only=prompts_only,
+            cleanup=cleanup,
+        )
+        effective_prompts_only = prompts_only or not base_bundle.script_greenlit
         return self.execute_prompts(
             bundle=base_bundle,
             output_dir=output_dir,
             dry_run=dry_run,
             prompts_only=effective_prompts_only,
             cleanup=False,
+        )
+
+    def generate_prompt_bundle(
+        self,
+        article_url: str,
+        output_dir: Path,
+        *,
+        dry_run: bool = True,
+        cleanup: bool = False,
+    ) -> PromptGenerationResult:
+        base_bundle = self._build_initial_bundle(
+            article_url=article_url,
+            output_dir=output_dir,
+            dry_run=dry_run,
+            prompts_only=True,
+            cleanup=cleanup,
+        )
+        prompt_bundle = self.execute_prompts(
+            bundle=base_bundle,
+            output_dir=output_dir,
+            dry_run=dry_run,
+            prompts_only=True,
+            cleanup=False,
+        )
+        clip_ids = [prompt.chunk_id for prompt in prompt_bundle.prompts.media_prompts]
+        return PromptGenerationResult(bundle=prompt_bundle, clip_ids=clip_ids)
+
+    def render_clip(
+        self,
+        bundle: PipelineBundle,
+        clip_id: str,
+        output_dir: Path,
+        *,
+        dry_run: bool = True,
+    ) -> ClipRenderResult:
+        run_dirs = self._prepare_run_environment(bundle.article.slug, output_dir, cleanup=False)
+        prompt = next((p for p in bundle.prompts.media_prompts if p.chunk_id == clip_id), None)
+        if not prompt:
+            raise ValueError(f"Prompt not found for clip '{clip_id}'")
+
+        provider = self.config.media_provider.lower()
+        if provider == "sora":
+            real_sora = not dry_run
+            if real_sora and not getattr(self.media_client, "api_key", None):
+                raise RuntimeError(
+                    f"Missing Sora API key. Set {self.config.sora_api_key_env} in your environment."
+                )
+            submit_dry_run = not real_sora
+            logger.info("🎬  Rendering clip %s via Sora (dry_run=%s)", clip_id, submit_dry_run)
+            media_assets = self.media_client.submit_prompts([prompt], dry_run=submit_dry_run)
+        elif provider == "veo":
+            if dry_run:
+                logger.info("🧪  Dry run: skipping Veo submission for %s", clip_id)
+                media_assets = self.media_client.submit_prompts([prompt], dry_run=True)
+            else:
+                has_key = bool(getattr(self.media_client, "api_key", None))
+                uses_vertex = bool(getattr(self.media_client, "use_vertex", False))
+                if not has_key and not uses_vertex:
+                    raise RuntimeError(
+                        f"Missing Veo API key. Set {self.config.veo_api_key_env} in your environment."
+                    )
+                logger.info("🎬  Rendering clip %s via Veo model %s", clip_id, self.config.veo_model)
+                media_assets = self.media_client.submit_prompts([prompt], dry_run=False)
+        else:
+            raise ValueError(f"Unsupported media_provider '{self.config.media_provider}'")
+
+        if not media_assets:
+            raise RuntimeError(f"Media client returned no assets for {clip_id}")
+        clip_path = Path(media_assets[0])
+
+        try:
+            stored_asset = clip_path.relative_to(run_dirs["run_dir"])
+        except ValueError:
+            stored_asset = clip_path
+
+        existing_assets = [Path(asset) for asset in bundle.sora_assets]
+        filtered_assets = [asset for asset in existing_assets if asset.stem != clip_id]
+        updated_assets = filtered_assets + [stored_asset]
+        updated_bundle = bundle.model_copy(update={"sora_assets": updated_assets})
+        return ClipRenderResult(bundle=updated_bundle, clip_id=clip_id, clip_asset=clip_path)
+
+    def stitch_bundle(
+        self,
+        bundle: PipelineBundle,
+        output_dir: Path,
+        *,
+        dry_run: bool = True,
+    ) -> PipelineBundle:
+        return self.execute_prompts(
+            bundle=bundle,
+            output_dir=output_dir,
+            dry_run=dry_run,
+            prompts_only=False,
+            cleanup=False,
+            stitch_only=True,
         )
 
     def _render_music_prompt(self, article: ArticleBundle, script: ScriptPlan) -> str:

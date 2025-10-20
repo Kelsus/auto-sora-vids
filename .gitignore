@@ -3,3 +3,5 @@
 *.egg-info/
 data/
 __pycache__/
+cdk.out/
+build/
