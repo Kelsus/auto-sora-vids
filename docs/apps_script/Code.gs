@@ -1,72 +1,100 @@
 const SETTINGS = {
+  spreadsheetId: '1V2LFWSGeZ8A5m-1VtKmt-gVrbz4tpnx_2c1fxKlupXc',
   sheetName: 'Queue',
-  endpointUrl: 'https://example.com/aivideo', // Replace with deployed API Gateway URL.
+  endpointUrl: 'https://uxc155vpv4.execute-api.us-east-1.amazonaws.com/prod/jobs', // Replace with deployed API Gateway URL.
+  apiKey: 'FhfYYIbNU49fc6tZbLWyDXufoFR8DaVyQyced7YD', // Optional API key for protected endpoints.
   processedKey: 'dispatched_rows',
+  scheduleTriggerProp: 'schedule_trigger_installed',
 };
 
 function processScheduledVideos() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SETTINGS.sheetName);
+  const start = new Date();
+  console.log(`[processScheduledVideos] Starting run at ${start.toISOString()}`);
+  ensureTimeTrigger();
+  const ss = SpreadsheetApp.openById(SETTINGS.spreadsheetId);
+  const sheet = ss.getSheetByName(SETTINGS.sheetName);
   if (!sheet) {
-    throw new Error(`Sheet "${SETTINGS.sheetName}" was not found.`);
+    const message = `Sheet "${SETTINGS.sheetName}" was not found.`;
+    console.error(`[processScheduledVideos] ${message}`);
+    throw new Error(message);
   }
 
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) {
+    console.log('[processScheduledVideos] No data rows found; skipping.');
     return;
   }
 
   const header = values[0].map((value) => value.toString().trim().toLowerCase());
   const urlIndex = header.indexOf('url');
   const scheduleIndex = header.indexOf('publish schedule datetime');
+  const socialNetworkIndex = header.indexOf('social network');
   if (urlIndex === -1 || scheduleIndex === -1) {
-    throw new Error('Expected header row with "url" and "publish schedule datetime" columns.');
+    const message = 'Expected header row with "url" and "publish schedule datetime" columns.';
+    console.error(`[processScheduledVideos] ${message}`);
+    throw new Error(message);
   }
 
-  const docProps = PropertiesService.getDocumentProperties();
-  const processed = new Set(JSON.parse(docProps.getProperty(SETTINGS.processedKey) || '[]'));
+  const scriptProps = PropertiesService.getScriptProperties();
+  const processed = new Set(JSON.parse(scriptProps.getProperty(SETTINGS.processedKey) || '[]'));
 
   const now = new Date();
-  const timezone = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
+  const timezone = ss.getSpreadsheetTimeZone();
   const formatTimestamp = (date) => Utilities.formatDate(date, timezone, "yyyy-MM-dd'T'HH:mm:ssXXX");
 
   for (let row = 1; row < values.length; row += 1) {
     const rowNumber = row + 1;
     if (processed.has(rowNumber)) {
+      console.log(`[processScheduledVideos] Row ${rowNumber} already processed; skipping.`);
       continue;
     }
 
     const url = values[row][urlIndex];
     if (!url) {
+      console.log(`[processScheduledVideos] Row ${rowNumber} missing URL; skipping.`);
       continue;
     }
 
     const scheduleCell = values[row][scheduleIndex];
     const scheduledAt = normaliseDate(scheduleCell, timezone);
     if (!scheduledAt) {
+      console.warn(`[processScheduledVideos] Row ${rowNumber} has invalid schedule value "${scheduleCell}".`);
       annotateCell(sheet, rowNumber, scheduleIndex + 1, 'Invalid datetime value');
       continue;
     }
 
-    if (scheduledAt > now) {
+    if (scheduledAt < now) {
+      console.log(`[processScheduledVideos] Row ${rowNumber} scheduled for future (${scheduledAt.toISOString()}); skipping.`);
+      continue;
+    }
+
+    const socialNetwork = values[row][socialNetworkIndex];
+    if (!socialNetwork) {
+      console.log(`[processScheduledVideos] Row ${rowNumber} missing social network; skipping.`);
       continue;
     }
 
     try {
       const payload = {
         url: url.toString().trim(),
-        scheduledAt: scheduledAt.toISOString(),
-        rowNumber,
+        scheduled_datetime: scheduledAt.toISOString(),
+        social_media: socialNetwork.toString()
       };
 
       invokeEndpoint(payload);
       annotateCell(sheet, rowNumber, scheduleIndex + 1, `Dispatched at ${formatTimestamp(now)}`);
       processed.add(rowNumber);
+      console.log(`[processScheduledVideos] Row ${rowNumber} dispatched successfully.`);
     } catch (error) {
+      console.error(`[processScheduledVideos] Row ${rowNumber} dispatch failed: ${error.message}`);
       annotateCell(sheet, rowNumber, scheduleIndex + 1, `Dispatch failed: ${error.message}`);
     }
   }
 
-  docProps.setProperty(SETTINGS.processedKey, JSON.stringify(Array.from(processed)));
+  scriptProps.setProperty(SETTINGS.processedKey, JSON.stringify(Array.from(processed)));
+  console.log(
+    `[processScheduledVideos] Completed run at ${new Date().toISOString()} (start ${start.toISOString()}) — processed ${processed.size} rows.`,
+  );
 }
 
 function normaliseDate(value, timezone) {
@@ -91,25 +119,77 @@ function normaliseDate(value, timezone) {
 
 function annotateCell(sheet, row, column, message) {
   sheet.getRange(row, column).setNote(message);
+  console.log(`[annotateCell] (${row},${column}) -> ${message}`);
 }
 
 function invokeEndpoint(payload) {
+  console.log(`[invokeEndpoint] Dispatching payload: ${JSON.stringify(payload)}`);
+  const headers = {
+    'Content-Type': 'application/json',
+  };
+  if (SETTINGS.apiKey && SETTINGS.apiKey !== 'REPLACE_WITH_API_KEY') {
+    headers['x-api-key'] = SETTINGS.apiKey;
+  }
   const response = UrlFetchApp.fetch(SETTINGS.endpointUrl, {
     method: 'post',
-    contentType: 'application/json',
+    headers,
     payload: JSON.stringify(payload),
     muteHttpExceptions: true,
   });
 
   if (response.getResponseCode() >= 300) {
-    throw new Error(`Endpoint returned ${response.getResponseCode()}: ${response.getContentText()}`);
+    const body = response.getContentText();
+    console.error(`[invokeEndpoint] Error ${response.getResponseCode()}: ${body}`);
+    throw new Error(`Endpoint returned ${response.getResponseCode()}: ${body}`);
   }
+  console.log(`[invokeEndpoint] Success ${response.getResponseCode()}`);
 }
 
 function resetDispatchedRows() {
-  PropertiesService.getDocumentProperties().deleteProperty(SETTINGS.processedKey);
+  PropertiesService.getScriptProperties().deleteProperty(SETTINGS.processedKey);
+  console.log('[resetDispatchedRows] Cleared dispatched rows property.');
+}
+
+function ensureTimeTrigger() {
+  const scriptProps = PropertiesService.getScriptProperties();
+  if (scriptProps.getProperty(SETTINGS.scheduleTriggerProp)) {
+    return;
+  }
+  const triggers = ScriptApp.getProjectTriggers();
+  const hasTrigger = triggers.some((trigger) =>
+    trigger.getEventType() === ScriptApp.EventType.CLOCK &&
+    trigger.getHandlerFunction() === 'processScheduledVideos'
+  );
+  if (!hasTrigger) {
+    ScriptApp.newTrigger('processScheduledVideos').timeBased().everyMinutes(15).create();
+    console.log('[ensureTimeTrigger] Installed 15-minute time based trigger.');
+  } else {
+    console.log('[ensureTimeTrigger] Time based trigger already present.');
+  }
+  scriptProps.setProperty(SETTINGS.scheduleTriggerProp, 'true');
+}
+
+function onEdit(e) {
+  try {
+    const range = e && e.range ? e.range.getA1Notation() : 'unknown';
+    console.log(`[onEdit] Triggered for range ${range}`);
+    processScheduledVideos();
+  } catch (error) {
+    console.error(`[onEdit] Failed: ${error.message}`);
+  }
+}
+
+function onChange(e) {
+  try {
+    const changeType = e && e.changeType ? e.changeType : 'unknown';
+    console.log(`[onChange] Triggered (type=${changeType})`);
+    processScheduledVideos();
+  } catch (error) {
+    console.error(`[onChange] Failed: ${error.message}`);
+  }
 }
 
 function installScheduleTrigger() {
   ScriptApp.newTrigger('processScheduledVideos').timeBased().everyMinutes(15).create();
+  console.log('[installScheduleTrigger] Installed 15-minute time based trigger.');
 }
