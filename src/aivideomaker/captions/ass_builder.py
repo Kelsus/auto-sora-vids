@@ -104,9 +104,12 @@ def build_karaoke_ass(
     play_res: tuple[int, int] = (720, 1280),
     style_name: str = "TikTok",
     font: str = "Inter",
-    font_size: int = 64,
+    font_size: int = 48,
     outline: int = 3,
-    alignment_code: int = 2,  # 2: bottom-center
+    alignment_code: int = 5,  # 5: centered vertically/horizontally
+    line_position_ratio: float = 0.58,
+    max_chars_per_line: int = 36,
+    max_line_duration: float = 3.0,
 ) -> str:
     # Header and styles (Primary white, Secondary yellow for karaoke fill, Outline black)
     res_x, res_y = play_res
@@ -119,7 +122,7 @@ def build_karaoke_ass(
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: {style_name}, {font}, {font_size}, &H00FFFFFF, &H0000FFFF, &H00000000, &H64000000, 0,0,0,0, 100,100, 0, 0, 1, {outline}, 0, {alignment_code}, 80,80,120, 1",
+        f"Style: {style_name}, {font}, {font_size}, &H00FFFFFF, &H0000FFFF, &H00000000, &H64000000, 0,0,0,0, 100,100, 0, 0, 1, {outline}, 0, {alignment_code}, 40,40,60, 1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -130,30 +133,84 @@ def build_karaoke_ass(
     word_iter = iter(words)
 
     events: list[str] = []
+    res_x, res_y = play_res
+    line_y = int(res_y * line_position_ratio)
+    position_prefix = f"{{\\pos({res_x // 2},{line_y})\\q2\\1c&HFFFFFF&}}"
 
-    # Map beat -> its word timings and durations
-    for beat in script.beats:
-        beat_words = list(_consume_words_for_text(word_iter, beat.transcript))
-        if not beat_words:
-            continue
-        start = beat_words[0].start
-        end = beat_words[-1].end
-        if end <= start:
-            end = start + 0.01
+    def append_event(word_slice: list[WordTiming]) -> None:
+        if not word_slice:
+            return
 
-        # Build karaoke payload: {\k<centiseconds>}word with spaces
-        parts: list[str] = []
-        for idx, w in enumerate(beat_words):
-            dur_cs = max(1, int(round((w.end - w.start) * 100)))
-            token = w.text
-            suffix_space = " " if idx + 1 < len(beat_words) else ""
-            parts.append(f"{{\\k{dur_cs}}}{token}{suffix_space}")
+        segment_start = word_slice[0].start
+        segment_end = word_slice[-1].end
+        if segment_end <= segment_start:
+            segment_end = segment_start + 0.01
 
-        text = "".join(parts)
-        line = (
-            f"Dialogue: 0,{_format_ass_time(start)},{_format_ass_time(end)},{style_name},,0,0,0,,{text}"
+        base_parts: list[str] = [position_prefix]
+        for idx, w in enumerate(word_slice):
+            base_parts.append(w.text)
+            if idx + 1 < len(word_slice):
+                base_parts.append(" ")
+        base_text = "".join(base_parts)
+        events.append(
+            f"Dialogue: 0,{_format_ass_time(segment_start)},{_format_ass_time(segment_end)},{style_name},,0,0,0,,{base_text}"
         )
-        events.append(line)
+
+        for idx, w in enumerate(word_slice):
+            word_start = w.start
+            word_end = w.end
+            if word_end <= word_start:
+                word_end = word_start + 0.01
+
+            highlight_parts: list[str] = [position_prefix, "{\\alpha&HFF&\\1c&HFFFFFF&}"]
+            for j, segment_word in enumerate(word_slice):
+                if j == idx:
+                    highlight_parts.append("{\\alpha&H00&\\1c&H00FFFF&}")
+                    highlight_parts.append(segment_word.text)
+                    highlight_parts.append("{\\alpha&HFF&\\1c&HFFFFFF&}")
+                else:
+                    highlight_parts.append(segment_word.text)
+                if j + 1 < len(word_slice):
+                    highlight_parts.append(" ")
+
+            highlight_text = "".join(highlight_parts)
+            events.append(
+                f"Dialogue: 0,{_format_ass_time(word_start)},{_format_ass_time(word_end)},{style_name},,0,0,0,,{highlight_text}"
+            )
+
+    segment_sources: Iterable[str]
+    if chunks and chunks.chunks:
+        segment_sources = [chunk.transcript for chunk in chunks.chunks]
+    else:
+        segment_sources = [beat.transcript for beat in script.beats]
+
+    for segment_text in segment_sources:
+        segment_words = list(_consume_words_for_text(word_iter, segment_text))
+        if not segment_words:
+            continue
+
+        start_idx = 0
+        total_words = len(segment_words)
+        while start_idx < total_words:
+            char_count = 0
+            end_idx = start_idx
+            base_time = segment_words[start_idx].start
+            while end_idx < total_words:
+                word = segment_words[end_idx]
+                next_chars = len(word.text)
+                if end_idx > start_idx:
+                    next_chars += 1  # space
+                line_duration = word.end - base_time
+                over_chars = char_count + next_chars > max_chars_per_line
+                over_time = line_duration > max_line_duration
+                if (over_chars or over_time) and end_idx > start_idx:
+                    break
+                char_count += next_chars
+                end_idx += 1
+            if end_idx == start_idx:
+                end_idx += 1
+            append_event(segment_words[start_idx:end_idx])
+            start_idx = end_idx
 
     return "\n".join(header + events) + "\n"
 
@@ -171,4 +228,3 @@ def write_karaoke_ass(
     path = export_dir / "captions.ass"
     path.write_text(content, encoding="utf-8")
     return path
-
