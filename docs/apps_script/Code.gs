@@ -1,11 +1,33 @@
 const SETTINGS = {
-  spreadsheetId: '1V2LFWSGeZ8A5m-1VtKmt-gVrbz4tpnx_2c1fxKlupXc',
-  sheetName: 'Queue',
-  endpointUrl: 'https://uxc155vpv4.execute-api.us-east-1.amazonaws.com/prod/jobs', // Replace with deployed API Gateway URL.
-  apiKey: 'FhfYYIbNU49fc6tZbLWyDXufoFR8DaVyQyced7YD', // Optional API key for protected endpoints.
+  spreadsheetId: getEnvVar('SPREADSHEET_ID'),
+  sheetName: getEnvVar('SHEET_NAME') || 'Queue',
+  endpointUrl: `${getEnvVar('API_BASE_URL')}/jobs`,
+  apiKey: getEnvVar('API_KEY'),
+  pipelineConfig: getJsonEnvVar('PIPELINE_CONFIG'),
   processedKey: 'dispatched_rows',
   scheduleTriggerProp: 'schedule_trigger_installed',
 };
+
+function getEnvVar(name) {
+  const scriptProps = PropertiesService.getScriptProperties();
+
+  const props = scriptProps.getProperties();
+  return props[name];
+}
+
+function getJsonEnvVar(name) {
+  const raw = getEnvVar(name);
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error(`[getJsonEnvVar] Failed to parse ${name}: ${error.message}`);
+    return null;
+  }
+}
+
 
 function processScheduledVideos() {
   const start = new Date();

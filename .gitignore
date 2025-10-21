@@ -6,3 +6,5 @@ __pycache__/
 cdk.out/
 build/
 google-api-key.json
+.clasp.json
+appsscript.json
