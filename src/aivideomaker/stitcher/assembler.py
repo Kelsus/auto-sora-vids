@@ -15,6 +15,7 @@ from moviepy.editor import (
     TextClip,
     CompositeVideoClip,
 )
+import ffmpeg
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class Stitcher:
         voice_track: Path | None = None,
         music_track: Path | None = None,
         captions: List[CaptionSegment] | None = None,
+        captions_ass: Path | None = None,
         *,
         voice_volume: float = 1.0,
         music_volume: float = 0.12,
@@ -78,7 +80,7 @@ class Stitcher:
         else:
             composite = None
 
-        if captions:
+        if captions and not captions_ass:
             caption_clips = self._build_caption_clips(final, captions)
             if caption_clips:
                 captioned = CompositeVideoClip([final] + caption_clips)
@@ -96,13 +98,50 @@ class Stitcher:
         if not safe_base:
             safe_base = "final_video"
         output_path = self.export_dir / f"{safe_base}.mp4"
-        final.write_videofile(
-            str(output_path),
-            codec="libx264",
-            audio_codec="aac",
-            temp_audiofile=str(output_path.with_suffix('.temp-audio.m4a')),
-            remove_temp=True,
-        )
+
+        # If burning ASS captions, first render a temp file, then overlay via ffmpeg libass
+        if captions_ass is not None:
+            temp_path = self.export_dir / f"{safe_base}.precap.mp4"
+            final.write_videofile(
+                str(temp_path),
+                codec="libx264",
+                audio_codec="aac",
+                temp_audiofile=str(temp_path.with_suffix('.temp-audio.m4a')),
+                remove_temp=True,
+            )
+            # Use ffmpeg subtitles filter (libass) to burn captions with optional fontsdir
+            input_stream = ffmpeg.input(str(temp_path))
+            fonts_dir = self.export_dir / "fonts"
+            if fonts_dir.exists() and fonts_dir.is_dir():
+                subbed = input_stream.filter('subtitles', str(captions_ass), fontsdir=str(fonts_dir))
+            else:
+                subbed = input_stream.filter('subtitles', str(captions_ass))
+            (
+                ffmpeg
+                .output(
+                    subbed,
+                    str(output_path),
+                    **{'c:a': 'copy'},
+                    vcodec='libx264',
+                    crf=18,
+                    preset='slow',
+                    movflags='+faststart',
+                )
+                .overwrite_output()
+                .run(quiet=False)
+            )
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
+        else:
+            final.write_videofile(
+                str(output_path),
+                codec="libx264",
+                audio_codec="aac",
+                temp_audiofile=str(output_path.with_suffix('.temp-audio.m4a')),
+                remove_temp=True,
+            )
         for clip in clips:
             clip.close()
         if voice_track:

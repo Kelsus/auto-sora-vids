@@ -29,6 +29,7 @@ from aivideomaker.media_pipeline.veo_client import VeoClient
 from aivideomaker.media_pipeline.voice import VoiceSessionManager, NarrationAsset
 from aivideomaker.media_pipeline.elevenlabs_music_client import ElevenLabsMusicClient
 from aivideomaker.stitcher.assembler import Stitcher, CaptionSegment
+from aivideomaker.captions.ass_builder import write_karaoke_ass
 
 _dotenv_path = find_dotenv(usecwd=True)
 if _dotenv_path:
@@ -716,13 +717,33 @@ class PipelineOrchestrator:
             else:
                 raise ValueError(f"Unsupported media_provider '{self.config.media_provider}'")
 
-        caption_segments = []
+        # Build captions: prefer ASS karaoke when alignment is present
+        caption_segments: list[CaptionSegment] = []
+        captions_ass_path: Path | None = None
         if bundle.narration_alignment_payload:
-            caption_segments = self._build_captions(bundle.chunks, use_alignment=True)
+            try:
+                # Derive play resolution from Sora/Veo settings when possible
+                play_res = (720, 1280)
+                try:
+                    if self.config.media_provider.lower() == "sora" and self.config.sora_size:
+                        w, h = self.config.sora_size.lower().split("x")
+                        play_res = (int(w), int(h))
+                except Exception:
+                    pass
+                captions_ass_path = write_karaoke_ass(
+                    script=bundle.script,
+                    alignment=bundle.narration_alignment_payload,
+                    chunks=bundle.chunks,
+                    export_dir=run_dirs["export_dir"],
+                    play_res=play_res,
+                )
+                logger.info("Generated karaoke captions at %s", captions_ass_path)
+            except Exception as exc:  # pragma: no cover - defensive path
+                logger.warning("Failed to generate ASS captions; falling back to disabled captions: %s", exc)
         else:
             caption_segments = self._build_captions(bundle.chunks)
-        if caption_segments:
-            self._write_captions_file(caption_segments, run_dirs["export_dir"] / "captions.srt")
+            if caption_segments:
+                self._write_captions_file(caption_segments, run_dirs["export_dir"] / "captions.srt")
 
         final_video = bundle.final_video
         should_stitch = (
@@ -740,6 +761,7 @@ class PipelineOrchestrator:
                 voice_track,
                 music_track,
                 captions=caption_segments,
+                captions_ass=captions_ass_path,
                 output_basename=bundle.article.slug,
             )
         else:
