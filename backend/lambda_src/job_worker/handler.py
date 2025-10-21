@@ -45,6 +45,7 @@ def handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:  # pragma: 
                 clip_ids=[],
                 dry_run=settings.default_dry_run,
                 social_media=metadata.social_media,
+                pipeline_config=metadata.pipeline_config,
             )
         workflow.mark_failed(job_context, error=event.get("error"))
         return {"jobId": job_context.job_id, "status": "FAILED"}

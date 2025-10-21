@@ -24,6 +24,7 @@ class ExecutionLauncher:
             "articleUrl": job.url,
             "socialMedia": job.social_media,
             "scheduledDatetime": job.scheduled_datetime,
+            "metadata": job.metadata,
         }
         self._client.start_execution(
             stateMachineArn=self.state_machine_arn,
@@ -33,4 +34,6 @@ class ExecutionLauncher:
 
     def _execution_name(self, job_id: str) -> str:
         suffix = uuid.uuid4().hex[:8]
-        return f"{job_id}-{suffix}-{int(time.time())}"[:80]
+        timestamp = int(time.time())
+        base = f"{suffix}-{timestamp}-{job_id}"
+        return base[:80]

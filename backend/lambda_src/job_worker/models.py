@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Mapping, Optional
 
 
 @dataclass(frozen=True)
@@ -10,14 +10,32 @@ class JobMetadata:
     article_url: str
     social_media: Optional[str] = None
     scheduled_datetime: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    pipeline_config: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_event(cls, payload: Dict[str, Any]) -> "JobMetadata":
+        metadata_raw = payload.get("metadata") or {}
+        metadata: Dict[str, Any]
+        if isinstance(metadata_raw, dict):
+            metadata = dict(metadata_raw)
+        elif isinstance(metadata_raw, Mapping):
+            metadata = dict(metadata_raw)
+        else:
+            metadata = {}
+        pipeline_config_raw = payload.get("pipelineConfig") or metadata.get("pipeline_config")
+        pipeline_config: Dict[str, Any]
+        if isinstance(pipeline_config_raw, Mapping):
+            pipeline_config = dict(pipeline_config_raw)
+        else:
+            pipeline_config = {}
         return cls(
             job_id=str(payload["jobId"]),
             article_url=str(payload["articleUrl"]),
             social_media=payload.get("socialMedia"),
             scheduled_datetime=payload.get("scheduledDatetime"),
+            metadata=metadata,
+            pipeline_config=pipeline_config,
         )
 
 
@@ -30,6 +48,7 @@ class JobContext:
     clip_ids: List[str]
     dry_run: bool
     social_media: Optional[str] = None
+    pipeline_config: Dict[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> Dict[str, Any]:
         return {
@@ -40,10 +59,17 @@ class JobContext:
             "clipIds": self.clip_ids,
             "dryRun": self.dry_run,
             "socialMedia": self.social_media,
+            "pipelineConfig": self.pipeline_config,
         }
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "JobContext":
+        pipeline_raw = payload.get("pipelineConfig") or {}
+        pipeline_config: Dict[str, Any]
+        if isinstance(pipeline_raw, Mapping):
+            pipeline_config = dict(pipeline_raw)
+        else:
+            pipeline_config = {}
         return cls(
             job_id=str(payload["jobId"]),
             article_url=str(payload["articleUrl"]),
@@ -52,6 +78,7 @@ class JobContext:
             clip_ids=list(payload.get("clipIds", [])),
             dry_run=bool(payload.get("dryRun", False)),
             social_media=payload.get("socialMedia"),
+            pipeline_config=pipeline_config,
         )
 
 

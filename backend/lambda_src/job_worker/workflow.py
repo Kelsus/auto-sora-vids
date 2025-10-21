@@ -4,7 +4,7 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from aivideomaker.orchestrator import PipelineBundle
 
@@ -32,10 +32,8 @@ class PipelineWorkflow:
         self._repository = repository or JobRepository(self._settings.jobs_table_name)
         self._storage = storage or ArtifactStorage(self._settings.output_bucket)
         self._bundle_store = bundle_store or BundleStore(self._settings.output_bucket)
-        self._runner = runner or PipelineRunner(
-            data_root=self._settings.data_root,
-            config_path=self._settings.pipeline_config_path,
-        )
+        self._injected_runner = runner
+        self._runner_cache: dict[str, PipelineRunner] = {}
 
     # ------------------------------------------------------------------
     # State machine actions
@@ -43,7 +41,8 @@ class PipelineWorkflow:
 
     def generate_prompts(self, metadata: JobMetadata, dry_run: bool | None = None) -> JobContext:
         dry_run_value = self._resolve_dry_run(dry_run)
-        prompts_result = self._runner.run_prompts(metadata.article_url, dry_run=dry_run_value)
+        runner = self._get_runner(metadata.pipeline_config)
+        prompts_result = runner.run_prompts(metadata.article_url, dry_run=dry_run_value)
         bundle = prompts_result.bundle
         job_id = metadata.job_id
         if job_id != bundle.article.slug:
@@ -78,6 +77,7 @@ class PipelineWorkflow:
             clip_ids=clip_ids,
             dry_run=dry_run_value,
             social_media=metadata.social_media,
+            pipeline_config=metadata.pipeline_config,
         )
         logger.info("Prepared prompts for job %s (%d clips)", job_id, len(clip_ids))
         return context
@@ -87,7 +87,8 @@ class PipelineWorkflow:
         self._refresh_local_run_dir(context.job_id, context.output_prefix)
         bundle = self._bundle_store.load(context.bundle_key)
         run_dir = self._local_run_dir(context.job_id)
-        clip_result = self._runner.render_clip(bundle, task.clip_id, context.dry_run)
+        runner = self._get_runner(context.pipeline_config)
+        clip_result = runner.render_clip(bundle, task.clip_id, context.dry_run)
         updated_bundle = clip_result.bundle
         clip_path = clip_result.clip_asset
         self._write_bundle(run_dir, updated_bundle)
@@ -110,7 +111,8 @@ class PipelineWorkflow:
     def stitch_final(self, context: JobContext) -> Dict[str, Any]:
         self._refresh_local_run_dir(context.job_id, context.output_prefix)
         bundle = self._bundle_store.load(context.bundle_key)
-        result_bundle = self._runner.stitch_final(bundle, context.dry_run)
+        runner = self._get_runner(context.pipeline_config)
+        result_bundle = runner.stitch_final(bundle, context.dry_run)
 
         run_dir = self._local_run_dir(context.job_id)
         self._write_bundle(run_dir, result_bundle)
@@ -170,3 +172,23 @@ class PipelineWorkflow:
             shutil.rmtree(run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
         self._storage.download_prefix(prefix, run_dir)
+
+    def _get_runner(self, overrides: Optional[Dict[str, Any]]) -> PipelineRunner:
+        if self._injected_runner is not None:
+            return self._injected_runner
+        payload = overrides or {}
+        signature = json.dumps(payload, sort_keys=True)
+        runner = self._runner_cache.get(signature)
+        if runner is None:
+            runner = PipelineRunner(
+                data_root=self._settings.data_root,
+                base_config_path=self._settings.pipeline_config_path,
+                config_overrides=payload,
+                veo_credentials_parameter=self._settings.veo_credentials_parameter,
+                anthropic_api_key_parameter=self._settings.anthropic_api_key_parameter,
+                openai_api_key_parameter=self._settings.openai_api_key_parameter,
+                elevenlabs_api_key_parameter=self._settings.elevenlabs_api_key_parameter,
+                google_api_key_parameter=self._settings.google_api_key_parameter,
+            )
+            self._runner_cache[signature] = runner
+        return runner

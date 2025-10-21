@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -13,6 +14,11 @@ class WorkerSettings:
     default_dry_run: bool
     final_video_prefix: str
     pipeline_config_path: Path | None
+    veo_credentials_parameter: Optional[str] = None
+    anthropic_api_key_parameter: Optional[str] = None
+    openai_api_key_parameter: Optional[str] = None
+    elevenlabs_api_key_parameter: Optional[str] = None
+    google_api_key_parameter: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "WorkerSettings":
@@ -25,6 +31,11 @@ class WorkerSettings:
             pipeline_config_path=Path(os.environ["PIPELINE_CONFIG_PATH"])
             if "PIPELINE_CONFIG_PATH" in os.environ
             else None,
+            veo_credentials_parameter=os.environ.get("VEO_CREDENTIALS_PARAMETER"),
+            anthropic_api_key_parameter=os.environ.get("ANTHROPIC_API_KEY_PARAMETER"),
+            openai_api_key_parameter=os.environ.get("OPENAI_API_KEY_PARAMETER"),
+            elevenlabs_api_key_parameter=os.environ.get("ELEVEN_LABS_API_KEY_PARAMETER"),
+            google_api_key_parameter=os.environ.get("GOOGLE_API_KEY_PARAMETER"),
         )
 
     def bundle_key(self, job_id: str) -> str:

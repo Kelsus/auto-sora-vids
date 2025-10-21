@@ -18,8 +18,10 @@ from aws_cdk import (
     aws_lambda as lambda_,
     aws_lambda_event_sources as lambda_event_sources,
     aws_lambda_python_alpha as lambda_python,
+    aws_ecr_assets as ecr_assets,
     aws_s3 as s3,
     aws_secretsmanager as secretsmanager,
+    aws_ssm as ssm,
     aws_stepfunctions as sfn,
     aws_stepfunctions_tasks as tasks,
 )
@@ -118,7 +120,9 @@ class VideoAutomationStack(Stack):
             command=[
                 "bash",
                 "-c",
-                "mkdir -p /asset-output && cp -r /asset-input/. /asset-output && cp -r /project-src/aivideomaker /asset-output/aivideomaker",
+                "mkdir -p /asset-output && "
+                "cp -r /asset-input/. /asset-output && "
+                "cp -r /project-src/aivideomaker /asset-output/aivideomaker",
             ],
             volumes=[
                 DockerVolume(
@@ -223,28 +227,75 @@ class VideoAutomationStack(Stack):
             targets=[targets.LambdaFunction(scheduler_lambda)],
         )
 
-        worker_lambda = lambda_python.PythonFunction(
+        worker_environment = {
+            "JOBS_TABLE_NAME": jobs_table.table_name,
+            "OUTPUT_BUCKET": output_bucket.bucket_name,
+            "DATA_ROOT": "/tmp/data",
+            "DEFAULT_DRY_RUN": "false",
+            "FINAL_VIDEO_PREFIX": "jobs/final",
+            "STAGE": stage,
+        }
+
+        secret_parameters: list[tuple[str, ssm.IParameter, str]] = []
+
+        veo_credentials_param_name = self.node.try_get_context("veoCredentialsParameterName") or "/auto-sora/veo-service-account"
+        veo_credentials_param = ssm.StringParameter.from_secure_string_parameter_attributes(
+            self,
+            "VeoCredentialsParameter",
+            parameter_name=veo_credentials_param_name,
+        )
+        secret_parameters.append(("VEO_CREDENTIALS_PARAMETER", veo_credentials_param, veo_credentials_param_name))
+
+        anthropic_param_name = self.node.try_get_context("anthropicApiKeyParameterName") or "/auto-sora/env/ANTHROPIC_API_KEY"
+        anthropic_param = ssm.StringParameter.from_secure_string_parameter_attributes(
+            self,
+            "AnthropicKeyParameter",
+            parameter_name=anthropic_param_name,
+        )
+        secret_parameters.append(("ANTHROPIC_API_KEY_PARAMETER", anthropic_param, anthropic_param_name))
+
+        additional_secret_params = [
+            ("openaiApiKeyParameterName", "OPENAI_API_KEY_PARAMETER", "/auto-sora/env/OPENAI_API_KEY"),
+            ("elevenLabsApiKeyParameterName", "ELEVEN_LABS_API_KEY_PARAMETER", "/auto-sora/env/ELEVEN_LABS_API_KEY"),
+            ("googleApiKeyParameterName", "GOOGLE_API_KEY_PARAMETER", "/auto-sora/env/GOOGLE_API_KEY"),
+        ]
+
+        for context_key, env_var, default_path in additional_secret_params:
+            param_name = self.node.try_get_context(context_key) or default_path
+            secret_param = ssm.StringParameter.from_secure_string_parameter_attributes(
+                self,
+                f"{env_var}Parameter",
+                parameter_name=param_name,
+            )
+            secret_parameters.append((env_var, secret_param, param_name))
+
+        worker_image_code = lambda_.DockerImageCode.from_image_asset(
+            directory=str(project_root),
+            file="backend/lambda_src/job_worker/Dockerfile",
+            exclude=[
+                "backend/cdk.out",
+                "cdk.out",
+                ".git",
+                ".venv",
+                "node_modules",
+                "__pycache__",
+            ],
+            platform=ecr_assets.Platform.LINUX_AMD64,
+        )
+
+        worker_lambda = lambda_.DockerImageFunction(
             self,
             "JobWorkerLambda",
-            entry=str(lambda_src),
-            index="job_worker/handler.py",
-            handler="handler",
-            runtime=lambda_.Runtime.PYTHON_3_11,
+            code=worker_image_code,
             timeout=Duration.minutes(15),
             memory_size=4096,
-            environment={
-                "JOBS_TABLE_NAME": jobs_table.table_name,
-                "OUTPUT_BUCKET": output_bucket.bucket_name,
-                "DATA_ROOT": "/tmp/data",
-                "DEFAULT_DRY_RUN": "false",
-                "FINAL_VIDEO_PREFIX": "jobs/final",
-                "STAGE": stage,
-            },
-            layers=[shared_layer, media_layer],
-            bundling=function_bundling,
+            environment=worker_environment,
         )
         jobs_table.grant_read_write_data(worker_lambda)
         output_bucket.grant_read_write(worker_lambda)
+        for env_var, parameter, name in secret_parameters:
+            worker_lambda.add_environment(env_var, name)
+            parameter.grant_read(worker_lambda)
 
         failure_handler = tasks.LambdaInvoke(
             self,

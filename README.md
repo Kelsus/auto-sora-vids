@@ -123,6 +123,7 @@ The `infra/` directory contains an AWS CDK app that wraps the downstream pipelin
 3. After deployment:
    - Set the `GoogleDriveServiceAccountSecret` value to the raw JSON of a Drive-enabled service account (scope: `https://www.googleapis.com/auth/drive.file`).
    - Update the `GDRIVE_FOLDER_ID` environment variable on the `GoogleDriveForwarderLambda` function with the target Drive folder ID.
+   - Create a SecureString parameter in AWS Systems Manager containing the Veo/Gemini service-account JSON, then redeploy with `--context veoCredentialsParameterName=/path/to/parameter`. The stack will pass the parameter name to the worker Lambda and grant it `ssm:GetParameter` permissions.
    - (Optional) Adjust the worker Lambda image (`infra/lambda_src/job_worker/Dockerfile`) to bundle codecs such as `ffmpeg` if you plan to run the pipeline end-to-end.
 4. Run the lightweight unit tests for the Lambda modules:
    ```bash
@@ -137,10 +138,16 @@ curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs \
   -d '{
         "url": "s3://my-bundles/how-generative-engine-optimization-geo-rewrites-the-rules/bundle.json",
         "social_media": "tiktok",
-        "scheduled_datetime": "2024-08-15T21:30:00Z"
+        "scheduled_datetime": "2024-08-15T21:30:00Z",
+        "pipeline_config": {
+          "media_provider": "veo",
+          "veo_aspect_ratio": "1:1"
+        }
       }'
 ```
 Jobs transition `PENDING → QUEUED → RUNNING → COMPLETED/FAILED` automatically. The worker stores all run artifacts in the provisioned S3 bucket under `jobs/<jobId>/run/`, and copies the final MP4 into `jobs/final/` (which triggers the Google Drive transfer Lambda).
+
+The optional `pipeline_config` map mirrors the fields in `PipelineConfig`; any keys you include are applied only to that job.
 
 ## Troubleshooting
 - `Missing Anthropics API key`: export `ANTHROPIC_API_KEY` or place it in a `.env` file before running the CLI.

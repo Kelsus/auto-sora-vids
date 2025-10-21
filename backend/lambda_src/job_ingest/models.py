@@ -33,12 +33,23 @@ class JobRequest:
 
         scheduled = cls._parse_datetime(str(payload["scheduled_datetime"]))
 
+        metadata_raw = payload.get("metadata") or {}
+        if not isinstance(metadata_raw, Mapping):
+            raise ValidationError("metadata must be an object")
+        metadata = dict(metadata_raw)
+
+        pipeline_config = payload.get("pipeline_config")
+        if pipeline_config:
+            if not isinstance(pipeline_config, Mapping):
+                raise ValidationError("pipeline_config must be an object")
+            metadata["pipeline_config"] = dict(pipeline_config)
+
         return cls(
             url=str(payload["url"]),
             social_media=str(payload["social_media"]),
             scheduled_datetime=scheduled,
             status=status,
-            metadata=payload.get("metadata", {}) or {},
+            metadata=metadata,
         )
 
     @staticmethod

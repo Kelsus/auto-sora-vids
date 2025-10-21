@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+from pathlib import Path
 from datetime import timezone
 
 import pytest
 
-from infra.lambda_src.job_ingest.app import JobIngestApplication
-from infra.lambda_src.job_ingest.http import HttpRequestParser
-from infra.lambda_src.job_ingest.models import JobRequest, ValidationError
-from infra.lambda_src.job_ingest.repository import JobRecord, PersistenceError
+root_dir = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(root_dir / "backend" / "lambda_src"))
+sys.path.insert(0, str(root_dir / "backend" / "lambda_src" / "common_layer" / "python"))
+
+from job_ingest.app import JobIngestApplication
+from job_ingest.http import HttpRequestParser
+from job_ingest.models import JobRequest, ValidationError
+from job_ingest.repository import JobRecord, PersistenceError
 
 
 class StubParser(HttpRequestParser):
@@ -43,6 +49,17 @@ def test_job_request_parsing_success():
     assert job.url == payload["url"]
     assert job.status == "PENDING"
     assert job.scheduled_datetime.tzinfo == timezone.utc
+
+
+def test_job_request_accepts_pipeline_config_override():
+    payload = {
+        "url": "https://example.com/story",
+        "social_media": "tiktok",
+        "scheduled_datetime": "2024-08-12T18:00:00Z",
+        "pipelineConfig": {"media_provider": "veo", "sora_model": "sora-3"},
+    }
+    job = JobRequest.from_payload(payload)
+    assert job.metadata["pipeline_config"] == {"media_provider": "veo", "sora_model": "sora-3"}
 
 
 def test_job_request_missing_field():

@@ -22,6 +22,7 @@ dependencies = [
   "soundfile>=0.12",
   "anthropic>=0.20",
   "google-cloud-storage>=3.4"
+  , "google-genai>=1.0.0"
 ]
 
 [project.optional-dependencies]

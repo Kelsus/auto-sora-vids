@@ -52,7 +52,8 @@ available options and provides a sample configuration you can copy to
   "veo_use_vertex": true,
   "veo_project": "your-gcp-project",
   "veo_location": "us-central1",
-  "veo_credentials_path": "google-api-key.json"
+  "veo_credentials_path": null,
+  "veo_credentials_parameter": "/auto-sora/veo-service-account"
 }
 ```
 
@@ -67,10 +68,21 @@ available options and provides a sample configuration you can copy to
 - **`narration_model_id`, `narration_voice_settings`, `narration_enable_timestamps`, `narration_audio_format`** – Detailed ElevenLabs narration controls.
 - **`use_music`, `music_api_key_env`, `music_*`** – Toggle and configure ElevenLabs Music output.
 - **`use_real_sora`, `sora_*`** – Turn on real Sora rendering and set OpenAI credentials, polling cadence, timeout, and size.
-- **`veo_*`** – Settings for Google Veo (Gemini) rendering, including Vertex AI authentication.
+- **`veo_*`** – Settings for Google Veo (Gemini) rendering, including Vertex AI authentication. For managed environments, store the service-account JSON in AWS Systems Manager Parameter Store and set `veo_credentials_parameter` (or the corresponding environment override) to the secure parameter name. `veo_credentials_path` remains useful for local experimentation when a file on disk is more convenient.
 
 You can mix and match these options—for example, keep `media_provider` as `"sora"`
 but disable `use_music` while still generating narration. Store the configuration
 file outside of version control (e.g., in `.gitignore`) to keep environment-specific
 credentials and preferences local. When switching between Sora and Veo, update the
 matching API key environment variable and rerun `aivideo --config <file>`.
+
+## Per-Job Overrides
+
+When dispatching a job through the serverless pipeline, include a `pipeline_config`
+object (snake_case in the DynamoDB `metadata` map or `pipelineConfig` on the HTTP
+payload) to override any subset of `PipelineConfig` fields for that job. The ingest
+Lambda persists the JSON, the scheduler forwards it to Step Functions, and the
+worker applies the overrides on top of its default configuration before running
+the pipeline. If you omit the field entirely, each job executes with the base
+settings baked into the service (or the optional file specified via
+`PIPELINE_CONFIG_PATH`).

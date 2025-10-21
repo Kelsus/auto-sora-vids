@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from infra.lambda_src.job_worker.config import WorkerSettings
-from infra.lambda_src.job_worker.models import ClipTask, JobContext, JobMetadata, JobStatusUpdate
-from infra.lambda_src.job_worker.workflow import PipelineWorkflow
+root_dir = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(root_dir / "backend" / "lambda_src"))
+sys.path.insert(0, str(root_dir / "backend" / "lambda_src" / "common_layer" / "python"))
+
+from job_worker.config import WorkerSettings
+from job_worker.models import ClipTask, JobContext, JobMetadata, JobStatusUpdate
+from job_worker.workflow import PipelineWorkflow
 
 
 class FakeBundle:
@@ -144,6 +149,31 @@ def test_generate_prompts_returns_context_and_updates_status(tmp_path):
     assert storage.uploaded_dirs
     assert "story" in storage.uploaded_dirs[0][0]
     assert store.saved[settings.bundle_key("story")] is runner.bundle
+
+
+def test_generate_prompts_includes_pipeline_config_override(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    override = {"media_provider": "veo", "veo_aspect_ratio": "1:1"}
+    metadata = JobMetadata(
+        job_id="story",
+        article_url="https://example.com/story",
+        metadata={"pipeline_config": override},
+        pipeline_config=override,
+    )
+
+    context = workflow.generate_prompts(metadata)
+
+    assert context.pipeline_config == override
+    payload = context.to_payload()
+    assert payload["pipelineConfig"] == override
+    restored = JobContext.from_payload(payload)
+    assert restored.pipeline_config == override
 
 
 def test_render_clip_updates_bundle_and_storage(tmp_path):

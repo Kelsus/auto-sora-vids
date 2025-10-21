@@ -86,7 +86,8 @@ class PipelineConfig(BaseModel):
     veo_use_vertex: bool = True
     veo_project: Optional[str] = None
     veo_location: str = "us-central1"
-    veo_credentials_path: Optional[Path] = Path("google-api-key.json")
+    veo_credentials_path: Optional[Path] = None
+    veo_credentials_parameter: Optional[str] = None
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineConfig":
@@ -197,6 +198,7 @@ class PipelineOrchestrator:
                 project=config.veo_project,
                 location=config.veo_location,
                 credentials_path=config.veo_credentials_path,
+                credentials_parameter=config.veo_credentials_parameter,
             )
         else:
             raise ValueError(f"Unsupported media_provider '{config.media_provider}'")

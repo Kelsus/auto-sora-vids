@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
+import sys
+from pathlib import Path
 
-from infra.lambda_src.job_scheduler.app import SchedulerApplication
-from infra.lambda_src.job_scheduler.models import ScheduledJob
-from infra.lambda_src.job_scheduler.settings import SchedulerSettings
+root_dir = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(root_dir / "backend" / "lambda_src"))
+sys.path.insert(0, str(root_dir / "backend" / "lambda_src" / "common_layer" / "python"))
+
+from job_scheduler.app import SchedulerApplication
+from job_scheduler.models import ScheduledJob
+from job_scheduler.settings import SchedulerSettings
 
 
 class StubRepository:
