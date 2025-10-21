@@ -4,7 +4,6 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
-import textwrap
 
 from moviepy.audio.fx import all as afx
 from moviepy.editor import (
@@ -12,8 +11,6 @@ from moviepy.editor import (
     VideoFileClip,
     concatenate_videoclips,
     CompositeAudioClip,
-    TextClip,
-    CompositeVideoClip,
 )
 import ffmpeg
 
@@ -80,13 +77,6 @@ class Stitcher:
         else:
             composite = None
 
-        if captions and not captions_ass:
-            caption_clips = self._build_caption_clips(final, captions)
-            if caption_clips:
-                captioned = CompositeVideoClip([final] + caption_clips)
-                captioned = captioned.set_audio(final.audio)
-                final = captioned
-
         if voice_track:
             final = final.subclip(0, target_duration)
 
@@ -98,6 +88,8 @@ class Stitcher:
         if not safe_base:
             safe_base = "final_video"
         output_path = self.export_dir / f"{safe_base}.mp4"
+
+        has_audio = final.audio is not None
 
         # If burning ASS captions, first render a temp file, then overlay via ffmpeg libass
         if captions_ass is not None:
@@ -113,19 +105,31 @@ class Stitcher:
             input_stream = ffmpeg.input(str(temp_path))
             fonts_dir = self.export_dir / "fonts"
             if fonts_dir.exists() and fonts_dir.is_dir():
-                subbed = input_stream.filter('subtitles', str(captions_ass), fontsdir=str(fonts_dir))
+                subbed_video = input_stream.video.filter(
+                    'subtitles',
+                    str(captions_ass),
+                    fontsdir=str(fonts_dir),
+                )
             else:
-                subbed = input_stream.filter('subtitles', str(captions_ass))
+                subbed_video = input_stream.video.filter('subtitles', str(captions_ass))
+
+            output_args = [subbed_video]
+            output_kwargs = {
+                'vcodec': 'libx264',
+                'crf': 18,
+                'preset': 'slow',
+                'movflags': '+faststart',
+            }
+            if has_audio:
+                output_args.append(input_stream.audio)
+                output_kwargs['c:a'] = 'copy'
+
             (
                 ffmpeg
                 .output(
-                    subbed,
+                    *output_args,
                     str(output_path),
-                    **{'c:a': 'copy'},
-                    vcodec='libx264',
-                    crf=18,
-                    preset='slow',
-                    movflags='+faststart',
+                    **output_kwargs,
                 )
                 .overwrite_output()
                 .run(quiet=False)
@@ -152,41 +156,3 @@ class Stitcher:
             composite.close()
         final.close()
         return output_path
-
-    def _build_caption_clips(
-        self, base_clip: VideoFileClip, captions: List[CaptionSegment]
-    ) -> List[TextClip]:
-        clips: List[TextClip] = []
-        font_size = int(base_clip.h * 0.045)
-        box_width = int(base_clip.w * 0.9)
-        for segment in captions:
-            duration = max(segment.end - segment.start, 0.5)
-            text = self._wrap_caption_text(segment.text)
-            if not text:
-                continue
-            base_txt = TextClip(
-                text,
-                method="caption",
-                fontsize=font_size,
-                font="Helvetica",
-                color="white",
-                align="center",
-                size=(box_width, None),
-            )
-            txt = base_txt.on_color(
-                color=(0, 0, 0),
-                col_opacity=0.65,
-                size=(box_width, base_txt.h + 1),
-            ).margin(left=20, right=20, top=15, bottom=30, opacity=0)
-            txt = txt.set_position(("center", base_clip.h * 0.78))
-            txt = txt.set_start(segment.start).set_duration(duration)
-            clips.append(txt)
-        return clips
-
-    @staticmethod
-    def _wrap_caption_text(text: str, width: int = 38) -> str:
-        cleaned = " ".join(text.strip().split())
-        if not cleaned:
-            return ""
-        lines = textwrap.wrap(cleaned, width=width)
-        return "\n".join(lines)
