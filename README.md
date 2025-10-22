@@ -38,6 +38,8 @@ src/aivideomaker/
    export ANTHROPIC_API_KEY="sk-ant-..."
    ```
    You can also create a `.env` file with this key; the CLI loads it automatically.
+   Before assuming a key is missing, double-check the repository `.env` file—many
+   local setups stash credentials there so they are picked up without touching your shell.
 
    To hit the real Sora API, add an OpenAI key with Sora 2 access:
    ```bash

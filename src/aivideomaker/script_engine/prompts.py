@@ -35,6 +35,11 @@ SCRIPT_PLANNING_PROMPT = dedent(
     `controversy_summary` contrasts the clashing priorities accurately. The `final_reveal` must restate the
     article's primary takeaway in plain language, supported by at least one of the fresh facts you identified.
 
+    When you cite a fact or metric, lightly attribute its origin—reference the publication, dataset, research team,
+    or institution in natural language (e.g., "According to Supply Chain Dive" or "Researchers at MIT found...").
+    Give the viewer a clear path back to the source—mention the article's outlet or lead researchers once, and nod to
+    any additional data providers when you call out their numbers. Keep it conversational; no formal footnotes needed.
+
     The narration must stay tight: aim for roughly 90 seconds of voiceover (~190 spoken words total).
     Structure the story in exactly 6 beats, each about 12-15 seconds, and include an "estimated_duration_sec"
     for every beat so the sum is <= 90 seconds. If the article is long, condense aggressively—drop details
