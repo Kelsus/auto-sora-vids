@@ -463,6 +463,13 @@ class VideoAutomationStack(Stack):
             parameter_name=gdrive_service_account_param_name,
         )
 
+        gdrive_folder_param_name = self.node.try_get_context("gdriveFolderIdParameterName") or "/auto-sora/env/GDRIVE_FOLDER_ID"
+        gdrive_folder_param = ssm.StringParameter.from_string_parameter_attributes(
+            self,
+            "GdriveFolderIdParameter",
+            parameter_name=gdrive_folder_param_name,
+        )
+
         gdrive_lambda = lambda_python.PythonFunction(
             self,
             "GoogleDriveForwarderLambda",
@@ -474,7 +481,7 @@ class VideoAutomationStack(Stack):
             memory_size=512,
             environment={
                 "GDRIVE_SERVICE_ACCOUNT_PARAMETER": gdrive_service_account_param_name,
-                "GDRIVE_FOLDER_ID": self.node.try_get_context("gdriveFolderId") or "1nWC7WSRYzqKuocLIUPzrT3n81WWGtpD2",
+                "GDRIVE_FOLDER_ID": gdrive_folder_param_name,
                 "STAGE": stage,
             },
             layers=[shared_layer],
@@ -495,6 +502,7 @@ class VideoAutomationStack(Stack):
         )
         output_bucket.grant_read(gdrive_lambda)
         gdrive_service_account_param.grant_read(gdrive_lambda)
+        gdrive_folder_param.grant_read(gdrive_lambda)
 
         gdrive_lambda.add_event_source(
             lambda_event_sources.S3EventSource(
