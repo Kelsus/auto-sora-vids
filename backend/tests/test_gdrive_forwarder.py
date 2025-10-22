@@ -26,7 +26,7 @@ class RecordingUploader:
 
 
 def test_forwarder_uploads_videos():
-    settings = ForwarderSettings(secret_name="secret", folder_id="folder")
+    settings = ForwarderSettings(service_account_parameter="parameter", folder_id="folder")
     storage = StubStorage(
         {"bucket:jobs/final/video.mp4": S3Object(bucket="bucket", key="jobs/final/video.mp4", body=b"data")}
     )

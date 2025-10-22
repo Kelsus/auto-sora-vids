@@ -22,7 +22,6 @@ from aws_cdk import (
     aws_lambda_python_alpha as lambda_python,
     aws_ecr_assets as ecr_assets,
     aws_s3 as s3,
-    aws_secretsmanager as secretsmanager,
     aws_sns as sns,
     aws_sns_subscriptions as sns_subscriptions,
     aws_ssm as ssm,
@@ -76,12 +75,6 @@ class VideoAutomationStack(Stack):
             enforce_ssl=True,
             auto_delete_objects=True,
             removal_policy=RemovalPolicy.DESTROY,
-        )
-
-        google_credentials_secret = secretsmanager.Secret(
-            self,
-            "GoogleDriveServiceAccountSecret",
-            description="Service account JSON for uploading final videos into Google Drive.",
         )
 
         shared_layer = lambda_python.PythonLayerVersion(
@@ -463,6 +456,13 @@ class VideoAutomationStack(Stack):
         )
         state_machine.grant_start_execution(dispatcher_lambda)
 
+        gdrive_service_account_param_name = self.node.try_get_context("gdriveServiceAccountParameterName") or "/auto-sora/env/GDRIVE_SERVICE_ACCOUNT"
+        gdrive_service_account_param = ssm.StringParameter.from_secure_string_parameter_attributes(
+            self,
+            "GdriveServiceAccountParameter",
+            parameter_name=gdrive_service_account_param_name,
+        )
+
         gdrive_lambda = lambda_python.PythonFunction(
             self,
             "GoogleDriveForwarderLambda",
@@ -473,8 +473,8 @@ class VideoAutomationStack(Stack):
             timeout=Duration.minutes(2),
             memory_size=512,
             environment={
-                "GDRIVE_SECRET_NAME": google_credentials_secret.secret_name,
-                "GDRIVE_FOLDER_ID": "REPLACE_ME",
+                "GDRIVE_SERVICE_ACCOUNT_PARAMETER": gdrive_service_account_param_name,
+                "GDRIVE_FOLDER_ID": self.node.try_get_context("gdriveFolderId") or "1nWC7WSRYzqKuocLIUPzrT3n81WWGtpD2",
                 "STAGE": stage,
             },
             layers=[shared_layer],
@@ -494,7 +494,7 @@ class VideoAutomationStack(Stack):
             ),
         )
         output_bucket.grant_read(gdrive_lambda)
-        google_credentials_secret.grant_read(gdrive_lambda)
+        gdrive_service_account_param.grant_read(gdrive_lambda)
 
         gdrive_lambda.add_event_source(
             lambda_event_sources.S3EventSource(
