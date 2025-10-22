@@ -35,3 +35,15 @@ class ScheduledJob:
             metadata=metadata,
             pipeline_config=pipeline_config,
         )
+
+    def to_message(self) -> Dict[str, Any]:
+        """Serialize the job for transport across the dispatch queue."""
+        payload: Dict[str, Any] = {
+            "jobId": self.job_id,
+            "url": self.url,
+            "scheduled_datetime": self.scheduled_datetime,
+            "metadata": self.metadata,
+        }
+        if self.social_media is not None:
+            payload["social_media"] = self.social_media
+        return payload

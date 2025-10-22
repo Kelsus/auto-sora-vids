@@ -11,6 +11,8 @@ from aws_cdk import (
     Stack,
     Tags,
     CfnOutput,
+    aws_cloudwatch as cloudwatch,
+    aws_cloudwatch_actions as cloudwatch_actions,
     aws_apigateway as apigateway,
     aws_dynamodb as dynamodb,
     aws_events as events,
@@ -21,9 +23,12 @@ from aws_cdk import (
     aws_ecr_assets as ecr_assets,
     aws_s3 as s3,
     aws_secretsmanager as secretsmanager,
+    aws_sns as sns,
+    aws_sns_subscriptions as sns_subscriptions,
     aws_ssm as ssm,
     aws_stepfunctions as sfn,
     aws_stepfunctions_tasks as tasks,
+    aws_sqs as sqs,
 )
 from constructs import Construct
 
@@ -220,6 +225,46 @@ class VideoAutomationStack(Stack):
         )
         jobs_table.grant_read_write_data(scheduler_lambda)
 
+        dispatch_dead_letter_queue = sqs.Queue(
+            self,
+            "JobDispatchDeadLetterQueue",
+            retention_period=Duration.days(14),
+        )
+        dispatch_queue = sqs.Queue(
+            self,
+            "JobDispatchQueue",
+            visibility_timeout=Duration.minutes(5),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                max_receive_count=5,
+                queue=dispatch_dead_letter_queue,
+            ),
+        )
+        dispatch_queue.grant_send_messages(scheduler_lambda)
+        scheduler_lambda.add_environment("DISPATCH_QUEUE_URL", dispatch_queue.queue_url)
+
+        dlq_alarm_topic = sns.Topic(
+            self,
+            "JobDispatchDlqAlarmTopic",
+            display_name="Job dispatch DLQ alerts",
+            topic_name=f"auto-sora-{stage}-dispatch-dlq-alerts",
+        )
+        alert_email = self.node.try_get_context("jobDispatchAlarmEmail")
+        if alert_email:
+            dlq_alarm_topic.add_subscription(sns_subscriptions.EmailSubscription(alert_email))
+
+        dispatch_dlq_alarm = cloudwatch.Alarm(
+            self,
+            "JobDispatchDlqAlarm",
+            metric=dispatch_dead_letter_queue.metric_approximate_number_of_messages_visible(),
+            threshold=1,
+            evaluation_periods=1,
+            datapoints_to_alarm=1,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarm_description="Notifies when the JobDispatch DLQ contains messages so they can be redriven.",
+        )
+        dispatch_dlq_alarm.add_alarm_action(cloudwatch_actions.SnsAction(dlq_alarm_topic))
+        dispatch_dlq_alarm.add_ok_action(cloudwatch_actions.SnsAction(dlq_alarm_topic))
+
         events.Rule(
             self,
             "JobDispatchRule",
@@ -346,22 +391,27 @@ class VideoAutomationStack(Stack):
             },
             result_path=sfn.JsonPath.DISCARD,
         )
-        render_clips_map.iterator(
-            tasks.LambdaInvoke(
-                self,
-                "RenderClip",
-                lambda_function=worker_lambda,
-                payload=sfn.TaskInput.from_object(
-                    {
-                        "action": "GENERATE_CLIP",
-                        "jobContext.$": "$.jobContext",
-                        "clipId.$": "$.clipId",
-                    }
-                ),
-                result_path=sfn.JsonPath.DISCARD,
-                payload_response_only=True,
-            )
+        render_clip_task = tasks.LambdaInvoke(
+            self,
+            "RenderClip",
+            lambda_function=worker_lambda,
+            payload=sfn.TaskInput.from_object(
+                {
+                    "action": "GENERATE_CLIP",
+                    "jobContext.$": "$.jobContext",
+                    "clipId.$": "$.clipId",
+                }
+            ),
+            result_path=sfn.JsonPath.DISCARD,
+            payload_response_only=True,
         )
+        render_clip_task.add_retry(
+            errors=["States.Timeout"],
+            interval=Duration.seconds(60),
+            max_attempts=3,
+            backoff_rate=2.0,
+        )
+        render_clips_map.iterator(render_clip_task)
         render_clips_map.add_catch(failure_chain, result_path="$.error")
 
         stitch_task = tasks.LambdaInvoke(
@@ -387,8 +437,31 @@ class VideoAutomationStack(Stack):
             timeout=Duration.hours(2),
         )
 
-        scheduler_lambda.add_environment("STATE_MACHINE_ARN", state_machine.state_machine_arn)
-        state_machine.grant_start_execution(scheduler_lambda)
+        dispatcher_lambda = lambda_python.PythonFunction(
+            self,
+            "StateMachineDispatcherLambda",
+            entry=str(lambda_src),
+            index="job_scheduler/queue_worker.py",
+            handler="handler",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            timeout=Duration.seconds(60),
+            memory_size=256,
+            environment={
+                "STATE_MACHINE_ARN": state_machine.state_machine_arn,
+                "STAGE": stage,
+            },
+            layers=[shared_layer],
+            bundling=function_bundling,
+        )
+        dispatch_queue.grant_consume_messages(dispatcher_lambda)
+        dispatcher_lambda.add_event_source(
+            lambda_event_sources.SqsEventSource(
+                dispatch_queue,
+                batch_size=5,
+                report_batch_item_failures=True,
+            )
+        )
+        state_machine.grant_start_execution(dispatcher_lambda)
 
         gdrive_lambda = lambda_python.PythonFunction(
             self,

@@ -29,11 +29,11 @@ class StubRepository:
         return job_id in self._consumable_ids
 
 
-class RecordingExecutor:
+class RecordingDispatcher:
     def __init__(self) -> None:
         self.started: List[ScheduledJob] = []
 
-    def start_execution(self, job: ScheduledJob) -> None:
+    def dispatch(self, job: ScheduledJob) -> None:
         self.started.append(job)
 
 
@@ -41,7 +41,7 @@ def test_scheduler_dispatches_only_available_jobs(monkeypatch):
     settings = SchedulerSettings(
         jobs_table_name="tbl",
         status_schedule_index="idx",
-        state_machine_arn="arn:aws:states:us-east-1:123:stateMachine:demo",
+        dispatch_queue_url="https://sqs.us-east-1.amazonaws.com/123/demo",
         batch_size=10,
     )
     items = [
@@ -49,13 +49,13 @@ def test_scheduler_dispatches_only_available_jobs(monkeypatch):
         {"jobId": "job-2", "url": "https://example.com/2"},
     ]
     repo = StubRepository(items=items, consumable_ids=["job-1"])
-    executor = RecordingExecutor()
-    app = SchedulerApplication(settings=settings, repository=repo, executor=executor)
+    dispatcher = RecordingDispatcher()
+    app = SchedulerApplication(settings=settings, repository=repo, dispatcher=dispatcher)
 
     result = app.handle()
 
     assert result == {"evaluated": 2, "dispatched": 1}
-    assert [job.job_id for job in executor.started] == ["job-1"]
+    assert [job.job_id for job in dispatcher.started] == ["job-1"]
     assert repo.query_args[0] == "idx"
     assert repo.query_args[2] == 10
 
@@ -64,14 +64,14 @@ def test_scheduler_handles_empty_query():
     settings = SchedulerSettings(
         jobs_table_name="tbl",
         status_schedule_index="idx",
-        state_machine_arn="arn:aws:states:us-east-1:123:stateMachine:demo",
+        dispatch_queue_url="https://sqs.us-east-1.amazonaws.com/123/demo",
         batch_size=5,
     )
     repo = StubRepository(items=[], consumable_ids=[])
-    executor = RecordingExecutor()
-    app = SchedulerApplication(settings=settings, repository=repo, executor=executor)
+    dispatcher = RecordingDispatcher()
+    app = SchedulerApplication(settings=settings, repository=repo, dispatcher=dispatcher)
 
     result = app.handle()
 
     assert result == {"evaluated": 0, "dispatched": 0}
-    assert not executor.started
+    assert not dispatcher.started

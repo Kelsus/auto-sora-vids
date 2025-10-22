@@ -8,7 +8,7 @@ from dataclasses import dataclass
 class SchedulerSettings:
     jobs_table_name: str
     status_schedule_index: str
-    state_machine_arn: str
+    dispatch_queue_url: str
     batch_size: int = 25
 
     @classmethod
@@ -16,6 +16,6 @@ class SchedulerSettings:
         return cls(
             jobs_table_name=os.environ["JOBS_TABLE_NAME"],
             status_schedule_index=os.environ["STATUS_SCHEDULE_INDEX"],
-            state_machine_arn=os.environ["STATE_MACHINE_ARN"],
+            dispatch_queue_url=os.environ["DISPATCH_QUEUE_URL"],
             batch_size=int(os.environ.get("BATCH_SIZE", "25")),
         )

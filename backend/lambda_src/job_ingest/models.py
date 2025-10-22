@@ -39,6 +39,8 @@ class JobRequest:
         metadata = dict(metadata_raw)
 
         pipeline_config = payload.get("pipeline_config")
+        if pipeline_config is None:
+            pipeline_config = payload.get("pipelineConfig")
         if pipeline_config:
             if not isinstance(pipeline_config, Mapping):
                 raise ValidationError("pipeline_config must be an object")

@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, Iterable
 
 from common import JobsRepository, utc_now_iso
-from job_scheduler.executor import ExecutionLauncher
+from job_scheduler.dispatcher import QueueDispatcher
 from job_scheduler.models import ScheduledJob
 from job_scheduler.settings import SchedulerSettings
 
@@ -17,11 +17,11 @@ class SchedulerApplication:
         self,
         settings: SchedulerSettings | None = None,
         repository: JobsRepository | None = None,
-        executor: ExecutionLauncher | None = None,
+        dispatcher: QueueDispatcher | None = None,
     ) -> None:
         self._settings = settings or SchedulerSettings.from_env()
         self._repository = repository or JobsRepository(self._settings.jobs_table_name)
-        self._executor = executor or ExecutionLauncher(state_machine_arn=self._settings.state_machine_arn)
+        self._dispatcher = dispatcher or QueueDispatcher(queue_url=self._settings.dispatch_queue_url)
 
     def handle(self) -> Dict[str, Any]:
         scheduled_before = utc_now_iso()
@@ -36,7 +36,7 @@ class SchedulerApplication:
         for job in due_jobs:
             evaluated += 1
             if self._repository.transition_status(job.job_id, "PENDING", "QUEUED"):
-                self._executor.start_execution(job)
+                self._dispatcher.dispatch(job)
                 dispatched += 1
                 logger.info("Job %s dispatched to state machine", job.job_id)
         return {"evaluated": evaluated, "dispatched": dispatched}
