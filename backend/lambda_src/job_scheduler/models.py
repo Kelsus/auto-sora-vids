@@ -10,6 +10,7 @@ class ScheduledJob:
     url: str
     social_media: Optional[str]
     scheduled_datetime: str
+    job_type: str = "SCHEDULED"
     metadata: Dict[str, Any] = field(default_factory=dict)
     pipeline_config: Dict[str, Any] = field(default_factory=dict)
 
@@ -32,6 +33,7 @@ class ScheduledJob:
             url=item["url"],
             social_media=item.get("social_media"),
             scheduled_datetime=item.get("scheduled_datetime", ""),
+            job_type=item.get("job_type", "SCHEDULED"),
             metadata=metadata,
             pipeline_config=pipeline_config,
         )
@@ -43,6 +45,7 @@ class ScheduledJob:
             "url": self.url,
             "scheduled_datetime": self.scheduled_datetime,
             "metadata": self.metadata,
+            "job_type": self.job_type,
         }
         if self.social_media is not None:
             payload["social_media"] = self.social_media

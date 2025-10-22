@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Mapping
 
 from aivideomaker.article_ingest.model import slugify
+from common.time_utils import ensure_utc, utc_now
 
 
 class ValidationError(ValueError):
@@ -16,14 +17,20 @@ class JobRequest:
     url: str
     social_media: str
     scheduled_datetime: datetime
+    job_type: str = "SCHEDULED"
     status: str = "PENDING"
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "JobRequest":
-        missing = [field for field in ("url", "social_media", "scheduled_datetime") if not payload.get(field)]
+        missing = [field for field in ("url", "social_media") if not payload.get(field)]
         if missing:
             raise ValidationError(f"Missing required fields: {', '.join(missing)}")
+
+        job_type_raw = payload.get("job_type")
+        job_type = str(job_type_raw or "SCHEDULED").upper()
+        if job_type not in {"SCHEDULED", "IMMEDIATE"}:
+            raise ValidationError("job_type must be one of SCHEDULED, IMMEDIATE")
 
         status = str(payload.get("status", "PENDING")).upper()
         if status not in {"PENDING", "QUEUED", "RUNNING", "COMPLETED", "FAILED"}:
@@ -31,7 +38,14 @@ class JobRequest:
                 "status must be one of PENDING, QUEUED, RUNNING, COMPLETED, FAILED"
             )
 
-        scheduled = cls._parse_datetime(str(payload["scheduled_datetime"]))
+        scheduled_input = payload.get("scheduled_datetime")
+        if job_type == "SCHEDULED" and not scheduled_input:
+            raise ValidationError("scheduled_datetime is required for SCHEDULED jobs")
+
+        if scheduled_input:
+            scheduled = cls._parse_datetime(str(scheduled_input))
+        else:
+            scheduled = ensure_utc(utc_now())
 
         metadata_raw = payload.get("metadata") or {}
         if not isinstance(metadata_raw, Mapping):
@@ -50,6 +64,7 @@ class JobRequest:
             url=str(payload["url"]),
             social_media=str(payload["social_media"]),
             scheduled_datetime=scheduled,
+            job_type=job_type,
             status=status,
             metadata=metadata,
         )

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict
 
+from common.time_utils import utc_now
 from job_ingest.http import (
     HttpRequestParser,
     bad_request,
@@ -54,18 +54,18 @@ class JobIngestApplication:
     @staticmethod
     def _build_record(job: JobRequest) -> JobRecord:
         job_id = job.job_id
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         return JobRecord(
             job_id=job_id,
             url=job.url,
             social_media=job.social_media,
             scheduled_datetime=job.scheduled_datetime,
+            job_type=job.job_type,
             status=job.status,
             metadata=dict(job.metadata),
             created_at=now,
             updated_at=now,
         )
-
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:  # pragma: no cover - AWS entry
     return JobIngestApplication().handle_event(event)

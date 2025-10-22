@@ -4,7 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from datetime import timezone
+from datetime import datetime, timezone
 
 import pytest
 
@@ -39,6 +39,7 @@ class FailingStore:
         raise PersistenceError("boom")
 
 
+
 def test_job_request_parsing_success():
     payload = {
         "url": "https://example.com/story",
@@ -49,6 +50,7 @@ def test_job_request_parsing_success():
     assert job.url == payload["url"]
     assert job.status == "PENDING"
     assert job.scheduled_datetime.tzinfo == timezone.utc
+    assert job.job_type == "SCHEDULED"
 
 
 def test_job_request_accepts_pipeline_config_override():
@@ -65,6 +67,30 @@ def test_job_request_accepts_pipeline_config_override():
 def test_job_request_missing_field():
     with pytest.raises(ValidationError):
         JobRequest.from_payload({"url": "https://example.com"})
+
+
+def test_job_request_requires_schedule_for_scheduled():
+    payload = {
+        "url": "https://example.com/story",
+        "social_media": "tiktok",
+        "job_type": "SCHEDULED",
+    }
+    with pytest.raises(ValidationError):
+        JobRequest.from_payload(payload)
+
+
+def test_job_request_allows_immediate_without_schedule():
+    payload = {
+        "url": "https://example.com/story",
+        "social_media": "tiktok",
+        "job_type": "immediate",
+    }
+    job = JobRequest.from_payload(payload)
+    assert job.job_type == "IMMEDIATE"
+    assert job.scheduled_datetime.tzinfo == timezone.utc
+    now = datetime.now(timezone.utc)
+    assert now >= job.scheduled_datetime
+    assert (now - job.scheduled_datetime).total_seconds() < 5
 
 
 def test_ingest_application_creates_job(monkeypatch):
@@ -89,6 +115,7 @@ def test_ingest_application_creates_job(monkeypatch):
     assert record.url == payload["url"]
     assert record.scheduled_datetime.tzinfo == timezone.utc
     assert record.job_id == "https-example-com-story"
+    assert record.job_type == "SCHEDULED"
 
 
 def test_ingest_returns_error_when_persistence_fails(monkeypatch):
@@ -103,6 +130,27 @@ def test_ingest_returns_error_when_persistence_fails(monkeypatch):
     response = app.handle_event({"httpMethod": "POST", "body": payload})
 
     assert response["statusCode"] == 500
+
+
+def test_ingest_stores_immediate_job(monkeypatch):
+    os.environ["JOBS_TABLE_NAME"] = "table"
+    payload = {
+        "url": "https://example.com/story",
+        "social_media": "tiktok",
+        "job_type": "immediate",
+    }
+    store = RecordingStore()
+    app = JobIngestApplication(repository=store, request_parser=StubParser(payload))
+
+    response = app.handle_event({"httpMethod": "POST", "body": payload})
+
+    assert response["statusCode"] == 201
+    assert store.records
+    record = store.records[0]
+    assert record.job_type == "IMMEDIATE"
+    assert record.scheduled_datetime.tzinfo == timezone.utc
+    assert (datetime.now(timezone.utc) - record.scheduled_datetime).total_seconds() < 5
+
 
 
 def test_options_request_returns_preflight_response(monkeypatch):

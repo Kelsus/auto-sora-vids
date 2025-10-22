@@ -53,6 +53,30 @@ class JobsRepository:
             kwargs["ExclusiveStartKey"] = last_key
         return items
 
+    def query_pending_immediate(
+        self,
+        index_name: str,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        kwargs: Dict[str, Any] = dict(
+            IndexName=index_name,
+            KeyConditionExpression=Key("status").eq("PENDING"),
+            Limit=limit,
+        )
+        items: List[Dict[str, Any]] = []
+        while len(items) < limit:
+            response = self._table.query(**kwargs)
+            for item in response.get("Items", []):
+                if item.get("job_type") == "IMMEDIATE":
+                    items.append(item)
+                if len(items) >= limit:
+                    break
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            kwargs["ExclusiveStartKey"] = last_key
+        return items
+
     def transition_status(self, job_id: str, expected_status: str, new_status: str) -> bool:
         now_iso = utc_now_iso()
         try:

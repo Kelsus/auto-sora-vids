@@ -13,6 +13,7 @@ class JobRecord:
     url: str
     social_media: str
     scheduled_datetime: datetime
+    job_type: str
     status: str
     metadata: Mapping[str, Any]
     created_at: datetime
@@ -24,6 +25,7 @@ class JobRecord:
             "url": self.url,
             "social_media": self.social_media,
             "scheduled_datetime": serialize_datetime(self.scheduled_datetime),
+            "job_type": self.job_type,
             "status": self.status,
             "metadata": dict(self.metadata),
             "created_at": serialize_datetime(self.created_at),

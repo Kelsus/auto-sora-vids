@@ -25,6 +25,7 @@ class ExecutionLauncher:
             "socialMedia": job.social_media,
             "scheduledDatetime": job.scheduled_datetime,
             "metadata": job.metadata,
+            "jobType": job.job_type,
         }
         self._client.start_execution(
             stateMachineArn=self.state_machine_arn,

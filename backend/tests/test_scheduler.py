@@ -14,14 +14,25 @@ from job_scheduler.settings import SchedulerSettings
 
 
 class StubRepository:
-    def __init__(self, items: List[Dict[str, Any]], consumable_ids: List[str]) -> None:
-        self._items = items
+    def __init__(
+        self,
+        scheduled_items: List[Dict[str, Any]],
+        immediate_items: List[Dict[str, Any]],
+        consumable_ids: List[str],
+    ) -> None:
+        self._scheduled_items = scheduled_items
+        self._immediate_items = immediate_items
         self._consumable_ids = set(consumable_ids)
         self.query_args = None
+        self.immediate_query_count = 0
 
     def query_pending_before(self, index_name: str, scheduled_before_iso: str, limit: int):
         self.query_args = (index_name, scheduled_before_iso, limit)
-        return self._items
+        return self._scheduled_items[:limit]
+
+    def query_pending_immediate(self, index_name: str, limit: int):
+        self.immediate_query_count += 1
+        return self._immediate_items[:limit]
 
     def transition_status(self, job_id: str, expected_status: str, new_status: str) -> bool:
         assert expected_status == "PENDING"
@@ -44,20 +55,27 @@ def test_scheduler_dispatches_only_available_jobs(monkeypatch):
         dispatch_queue_url="https://sqs.us-east-1.amazonaws.com/123/demo",
         batch_size=10,
     )
-    items = [
+    immediate_items = [
+        {"jobId": "job-imm", "url": "https://example.com/immediate"},
+    ]
+    scheduled_items = [
         {"jobId": "job-1", "url": "https://example.com/1"},
         {"jobId": "job-2", "url": "https://example.com/2"},
     ]
-    repo = StubRepository(items=items, consumable_ids=["job-1"])
+    repo = StubRepository(
+        scheduled_items=scheduled_items,
+        immediate_items=immediate_items,
+        consumable_ids=["job-imm", "job-1"],
+    )
     dispatcher = RecordingDispatcher()
     app = SchedulerApplication(settings=settings, repository=repo, dispatcher=dispatcher)
 
     result = app.handle()
 
-    assert result == {"evaluated": 2, "dispatched": 1}
-    assert [job.job_id for job in dispatcher.started] == ["job-1"]
+    assert result == {"evaluated": 3, "dispatched": 2}
+    assert [job.job_id for job in dispatcher.started] == ["job-imm", "job-1"]
     assert repo.query_args[0] == "idx"
-    assert repo.query_args[2] == 10
+    assert repo.query_args[2] == settings.batch_size - len(immediate_items)
 
 
 def test_scheduler_handles_empty_query():
@@ -67,7 +85,7 @@ def test_scheduler_handles_empty_query():
         dispatch_queue_url="https://sqs.us-east-1.amazonaws.com/123/demo",
         batch_size=5,
     )
-    repo = StubRepository(items=[], consumable_ids=[])
+    repo = StubRepository(scheduled_items=[], immediate_items=[], consumable_ids=[])
     dispatcher = RecordingDispatcher()
     app = SchedulerApplication(settings=settings, repository=repo, dispatcher=dispatcher)
 
