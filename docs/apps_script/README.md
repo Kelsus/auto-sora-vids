@@ -6,11 +6,14 @@ This Apps Script watches a Google Sheet for article URLs that should be fed into
 
 Create a sheet (default name `Queue`) with the following header row:
 
-| url | publish schedule datetime | social network |
-| --- | --- | --- |
+| url | schedule datetime | social network | job type | drive folder |
+| --- | --- | --- | --- | --- |
 
 * Columns must use the exact header labels (case insensitive).
+* The `job type` column is optional. When omitted or left blank the script defaults to `SCHEDULED` behaviour and omits the field from the payload. Populated cells must be `SCHEDULED` or `IMMEDIATE` (case insensitive).
+* The `drive folder` column is required for every row. Its value must match a downstream Google Drive subfolder; the script copies it into `pipeline_config.drive_folder` on dispatch.
 * Timestamps can be native Google Sheets datetime values or ISO-8601 strings. The script skips blank rows automatically.
+* Scheduled jobs still require a future `schedule datetime`. Immediate jobs ignore the datetime cell but the script will write status notes back to that column for consistency.
 
 ## Script Setup
 
@@ -28,7 +31,7 @@ The automation loads all runtime settings from script properties:
 - `SHEET_NAME` *(optional)* – sheet/tab name. Defaults to `Queue` if omitted.
 - `API_BASE_URL` *(required)* – base URL of the deployed API Gateway stage, e.g. `https://uxc155vpv4.execute-api.us-east-1.amazonaws.com/prod`.
 - `API_KEY` *(required if your API is protected)* – API Gateway key value; omit if the endpoint is public.
-- `PIPELINE_CONFIG` *(optional)* – JSON string with per-job overrides you want every dispatch to include, for example `{ "media_provider": "veo" }`. The helper parses and forwards the object as-is.
+- `PIPELINE_CONFIG` *(optional)* – JSON string with per-job overrides you want every dispatch to include, for example `{ "media_provider": "veo" }`. The helper parses and forwards the object as-is; row-level `drive folder` values merge into this object on dispatch.
 
 To add a script property:
 

@@ -49,10 +49,11 @@ function processScheduledVideos() {
 
   const header = values[0].map((value) => value.toString().trim().toLowerCase());
   const urlIndex = header.indexOf('url');
-  const scheduleIndex = header.indexOf('publish schedule datetime');
-  const socialNetworkIndex = header.indexOf('social network');
-  if (urlIndex === -1 || scheduleIndex === -1) {
-    const message = 'Expected header row with "url" and "publish schedule datetime" columns.';
+  const scheduleIndex = header.indexOf('schedule datetime');
+  const jobTypeIndex = header.indexOf('job type');
+  const driveFolderIndex = header.indexOf('drive folder');
+  if (urlIndex === -1 || driveFolderIndex === -1) {
+    const message = 'Expected header row with "url", and "drive folder" columns.';
     console.error(`[processScheduledVideos] ${message}`);
     throw new Error(message);
   }
@@ -77,33 +78,61 @@ function processScheduledVideos() {
       continue;
     }
 
-    const scheduleCell = values[row][scheduleIndex];
-    const scheduledAt = normaliseDate(scheduleCell, timezone);
-    if (!scheduledAt) {
-      console.warn(`[processScheduledVideos] Row ${rowNumber} has invalid schedule value "${scheduleCell}".`);
-      annotateCell(sheet, rowNumber, scheduleIndex + 1, 'Invalid datetime value');
+    const jobTypeResult = resolveJobType({
+      rawValue: jobTypeIndex === -1 ? '' : values[row][jobTypeIndex],
+      columnPresent: jobTypeIndex !== -1,
+    });
+    if (jobTypeResult.error) {
+      console.warn(`[processScheduledVideos] Row ${rowNumber}: ${jobTypeResult.error}`);
+      const noteColumn = jobTypeIndex !== -1 ? jobTypeIndex + 1 : scheduleIndex + 1;
+      annotateCell(sheet, rowNumber, noteColumn, jobTypeResult.error);
       continue;
     }
 
-    if (scheduledAt < now) {
-      console.log(`[processScheduledVideos] Row ${rowNumber} scheduled for future (${scheduledAt.toISOString()}); skipping.`);
-      continue;
+    const { jobType, includeInPayload } = jobTypeResult;
+
+    let scheduledAt = null;
+    if (jobType === 'SCHEDULED') {
+      const scheduleCell = values[row][scheduleIndex];
+      scheduledAt = normaliseDate(scheduleCell, timezone);
+      if (!scheduledAt) {
+        console.warn(`[processScheduledVideos] Row ${rowNumber} has invalid schedule value "${scheduleCell}".`);
+        annotateCell(sheet, rowNumber, scheduleIndex + 1, 'Invalid datetime value');
+        continue;
+      }
+
+      if (scheduledAt < now) {
+        console.log(`[processScheduledVideos] Row ${rowNumber} scheduled for future (${scheduledAt.toISOString()}); skipping.`);
+        continue;
+      }
     }
 
-    const socialNetwork = values[row][socialNetworkIndex];
-    if (!socialNetwork) {
-      console.log(`[processScheduledVideos] Row ${rowNumber} missing social network; skipping.`);
+
+    const driveFolderRaw = values[row][driveFolderIndex];
+    const driveFolder = normaliseDriveFolder(driveFolderRaw);
+    if (!driveFolder) {
+      const message = 'Drive folder is required.';
+      console.warn(`[processScheduledVideos] Row ${rowNumber}: ${message}`);
+      annotateCell(sheet, rowNumber, driveFolderIndex + 1, message);
       continue;
     }
 
     try {
-      const payload = {
-        url: url.toString().trim(),
-        scheduled_datetime: scheduledAt.toISOString()
-      };
+      const payload = createDispatchPayload({
+        url,
+        jobType,
+        includeJobType: includeInPayload,
+        scheduledAt,
+        driveFolder,
+      });
 
       invokeEndpoint(payload);
-      annotateCell(sheet, rowNumber, scheduleIndex + 1, `Dispatched at ${formatTimestamp(now)}`);
+      annotateCell(
+        sheet,
+        rowNumber,
+        scheduleIndex + 1,
+        `Dispatched (${jobType}) at ${formatTimestamp(now)}`,
+      );
       processed.add(rowNumber);
       console.log(`[processScheduledVideos] Row ${rowNumber} dispatched successfully.`);
     } catch (error) {
@@ -141,6 +170,30 @@ function normaliseDate(value, timezone) {
 function annotateCell(sheet, row, column, message) {
   sheet.getRange(row, column).setNote(message);
   console.log(`[annotateCell] (${row},${column}) -> ${message}`);
+}
+
+function createDispatchPayload({ url, jobType, includeJobType, scheduledAt, driveFolder }) {
+  const payload = {
+    url: url.toString().trim(),
+  };
+
+  if (includeJobType) {
+    payload.job_type = jobType;
+  }
+
+  if (jobType === 'SCHEDULED' && scheduledAt instanceof Date) {
+    payload.scheduled_datetime = scheduledAt.toISOString();
+  }
+
+  const mergedConfig = clonePipelineConfig(SETTINGS.pipelineConfig);
+  if (driveFolder) {
+    mergedConfig.drive_folder = driveFolder;
+  }
+  if (Object.keys(mergedConfig).length > 0) {
+    payload.pipeline_config = mergedConfig;
+  }
+
+  return payload;
 }
 
 function invokeEndpoint(payload) {
@@ -197,6 +250,52 @@ function onEdit(e) {
     processScheduledVideos();
   } catch (error) {
     console.error(`[onEdit] Failed: ${error.message}`);
+  }
+}
+
+function resolveJobType({ rawValue, columnPresent }) {
+  if (!columnPresent) {
+    return { jobType: 'SCHEDULED', includeInPayload: false, error: null };
+  }
+
+  if (rawValue === null || rawValue === undefined) {
+    return { jobType: 'SCHEDULED', includeInPayload: false, error: null };
+  }
+
+  const text = rawValue.toString().trim();
+  if (!text) {
+    return { jobType: 'SCHEDULED', includeInPayload: false, error: null };
+  }
+
+  const upper = text.toUpperCase();
+  if (upper === 'SCHEDULED' || upper === 'IMMEDIATE') {
+    return { jobType: upper, includeInPayload: true, error: null };
+  }
+
+  return {
+    jobType: null,
+    includeInPayload: false,
+    error: `Invalid job type "${text}". Expected SCHEDULED or IMMEDIATE.`,
+  };
+}
+
+function normaliseDriveFolder(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const text = value.toString().trim();
+  return text ? text : null;
+}
+
+function clonePipelineConfig(baseConfig) {
+  if (!baseConfig || typeof baseConfig !== 'object') {
+    return {};
+  }
+  try {
+    return JSON.parse(JSON.stringify(baseConfig));
+  } catch (error) {
+    console.warn(`[clonePipelineConfig] Failed to clone base config: ${error.message}`);
+    return {};
   }
 }
 
