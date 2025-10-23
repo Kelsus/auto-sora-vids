@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Mapping, Optional
 class JobMetadata:
     job_id: str
     article_url: str
-    social_media: Optional[str] = None
     scheduled_datetime: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     pipeline_config: Dict[str, Any] = field(default_factory=dict)
@@ -32,7 +31,6 @@ class JobMetadata:
         return cls(
             job_id=str(payload["jobId"]),
             article_url=str(payload["articleUrl"]),
-            social_media=payload.get("socialMedia"),
             scheduled_datetime=payload.get("scheduledDatetime"),
             metadata=metadata,
             pipeline_config=pipeline_config,
@@ -47,7 +45,6 @@ class JobContext:
     output_prefix: str
     clip_ids: List[str]
     dry_run: bool
-    social_media: Optional[str] = None
     pipeline_config: Dict[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> Dict[str, Any]:
@@ -58,7 +55,6 @@ class JobContext:
             "outputPrefix": self.output_prefix,
             "clipIds": self.clip_ids,
             "dryRun": self.dry_run,
-            "socialMedia": self.social_media,
             "pipelineConfig": self.pipeline_config,
         }
 
@@ -77,7 +73,6 @@ class JobContext:
             output_prefix=str(payload["outputPrefix"]),
             clip_ids=list(payload.get("clipIds", [])),
             dry_run=bool(payload.get("dryRun", False)),
-            social_media=payload.get("socialMedia"),
             pipeline_config=pipeline_config,
         )
 

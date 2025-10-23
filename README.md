@@ -137,7 +137,6 @@ curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs \
   -H "Content-Type: application/json" \
   -d '{
         "url": "s3://my-bundles/how-generative-engine-optimization-geo-rewrites-the-rules/bundle.json",
-        "social_media": "tiktok",
         "scheduled_datetime": "2024-08-15T21:30:00Z",
         "pipeline_config": {
           "media_provider": "veo",

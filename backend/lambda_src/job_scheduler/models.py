@@ -8,7 +8,6 @@ from typing import Any, Dict, Mapping, Optional
 class ScheduledJob:
     job_id: str
     url: str
-    social_media: Optional[str]
     scheduled_datetime: str
     job_type: str = "SCHEDULED"
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -31,7 +30,6 @@ class ScheduledJob:
         return cls(
             job_id=item["jobId"],
             url=item["url"],
-            social_media=item.get("social_media"),
             scheduled_datetime=item.get("scheduled_datetime", ""),
             job_type=item.get("job_type", "SCHEDULED"),
             metadata=metadata,
@@ -47,6 +45,4 @@ class ScheduledJob:
             "metadata": self.metadata,
             "job_type": self.job_type,
         }
-        if self.social_media is not None:
-            payload["social_media"] = self.social_media
         return payload

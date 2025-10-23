@@ -22,7 +22,6 @@ class ExecutionLauncher:
         payload = {
             "jobId": job.job_id,
             "articleUrl": job.url,
-            "socialMedia": job.social_media,
             "scheduledDatetime": job.scheduled_datetime,
             "metadata": job.metadata,
             "jobType": job.job_type,

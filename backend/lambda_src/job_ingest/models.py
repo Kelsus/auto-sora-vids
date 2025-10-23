@@ -15,7 +15,6 @@ class ValidationError(ValueError):
 @dataclass(frozen=True)
 class JobRequest:
     url: str
-    social_media: str
     scheduled_datetime: datetime
     job_type: str = "SCHEDULED"
     status: str = "PENDING"
@@ -23,7 +22,7 @@ class JobRequest:
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "JobRequest":
-        missing = [field for field in ("url", "social_media") if not payload.get(field)]
+        missing = [field for field in ("url") if not payload.get(field)]
         if missing:
             raise ValidationError(f"Missing required fields: {', '.join(missing)}")
 
@@ -62,7 +61,6 @@ class JobRequest:
 
         return cls(
             url=str(payload["url"]),
-            social_media=str(payload["social_media"]),
             scheduled_datetime=scheduled,
             job_type=job_type,
             status=status,

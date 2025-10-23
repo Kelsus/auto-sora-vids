@@ -18,7 +18,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"url\": \"https://example.com/news/investigative-piece\",\n  \"social_media\": \"tiktok\",\n  \"scheduled_datetime\": \"2025-10-17T21:30:00Z\",\n  \"metadata\": {\n    \"notes\": \"Submitted from Postman\"\n  }\n}",
+          "raw": "{\n  \"url\": \"https://example.com/news/investigative-piece\",\n  \"scheduled_datetime\": \"2025-10-17T21:30:00Z\",\n  \"metadata\": {\n    \"notes\": \"Submitted from Postman\"\n  }\n}",
           "options": {
             "raw": {
               "language": "json"

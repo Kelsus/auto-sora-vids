@@ -11,7 +11,6 @@ from common import JobsRepository, RepositoryError, serialize_datetime
 class JobRecord:
     job_id: str
     url: str
-    social_media: str
     scheduled_datetime: datetime
     job_type: str
     status: str
@@ -23,7 +22,6 @@ class JobRecord:
         return {
             "jobId": self.job_id,
             "url": self.url,
-            "social_media": self.social_media,
             "scheduled_datetime": serialize_datetime(self.scheduled_datetime),
             "job_type": self.job_type,
             "status": self.status,

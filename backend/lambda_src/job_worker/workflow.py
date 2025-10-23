@@ -76,7 +76,6 @@ class PipelineWorkflow:
             output_prefix=output_prefix,
             clip_ids=clip_ids,
             dry_run=dry_run_value,
-            social_media=metadata.social_media,
             pipeline_config=metadata.pipeline_config,
         )
         logger.info("Prepared prompts for job %s (%d clips)", job_id, len(clip_ids))

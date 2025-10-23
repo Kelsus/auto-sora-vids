@@ -99,8 +99,7 @@ function processScheduledVideos() {
     try {
       const payload = {
         url: url.toString().trim(),
-        scheduled_datetime: scheduledAt.toISOString(),
-        social_media: socialNetwork.toString()
+        scheduled_datetime: scheduledAt.toISOString()
       };
 
       invokeEndpoint(payload);

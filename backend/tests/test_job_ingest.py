@@ -43,7 +43,6 @@ class FailingStore:
 def test_job_request_parsing_success():
     payload = {
         "url": "https://example.com/story",
-        "social_media": "tiktok",
         "scheduled_datetime": "2024-08-12T18:00:00Z",
     }
     job = JobRequest.from_payload(payload)
@@ -56,7 +55,6 @@ def test_job_request_parsing_success():
 def test_job_request_accepts_pipeline_config_override():
     payload = {
         "url": "https://example.com/story",
-        "social_media": "tiktok",
         "scheduled_datetime": "2024-08-12T18:00:00Z",
         "pipelineConfig": {"media_provider": "veo", "sora_model": "sora-3"},
     }
@@ -72,7 +70,6 @@ def test_job_request_missing_field():
 def test_job_request_requires_schedule_for_scheduled():
     payload = {
         "url": "https://example.com/story",
-        "social_media": "tiktok",
         "job_type": "SCHEDULED",
     }
     with pytest.raises(ValidationError):
@@ -82,7 +79,6 @@ def test_job_request_requires_schedule_for_scheduled():
 def test_job_request_allows_immediate_without_schedule():
     payload = {
         "url": "https://example.com/story",
-        "social_media": "tiktok",
         "job_type": "immediate",
     }
     job = JobRequest.from_payload(payload)
@@ -97,7 +93,6 @@ def test_ingest_application_creates_job(monkeypatch):
     os.environ["JOBS_TABLE_NAME"] = "table"
     payload = {
         "url": "https://example.com/story",
-        "social_media": "tiktok",
         "scheduled_datetime": "2024-08-12T18:00:00Z",
         "status": "pending",
         "metadata": {"topic": "news"},
@@ -122,7 +117,6 @@ def test_ingest_returns_error_when_persistence_fails(monkeypatch):
     os.environ["JOBS_TABLE_NAME"] = "table"
     payload = {
         "url": "https://example.com/story",
-        "social_media": "tiktok",
         "scheduled_datetime": "2024-08-12T18:00:00Z",
     }
     app = JobIngestApplication(repository=FailingStore(), request_parser=StubParser(payload))
@@ -136,7 +130,6 @@ def test_ingest_stores_immediate_job(monkeypatch):
     os.environ["JOBS_TABLE_NAME"] = "table"
     payload = {
         "url": "https://example.com/story",
-        "social_media": "tiktok",
         "job_type": "immediate",
     }
     store = RecordingStore()
