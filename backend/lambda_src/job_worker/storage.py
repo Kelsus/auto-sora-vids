@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import boto3
 
@@ -25,10 +25,18 @@ class ArtifactStorage:
             uploaded.append(key)
         return uploaded
 
-    def upload_file(self, path: Path, key: str, metadata: Optional[Dict[str, str]] = None) -> None:
-        extra_args = None
+    def upload_file(
+        self,
+        path: Path,
+        key: str,
+        metadata: Optional[Dict[str, str]] = None,
+        content_type: Optional[str] = None,
+    ) -> None:
+        extra_args: Dict[str, Any] = {}
         if metadata:
-            extra_args = {"Metadata": {k: str(v) for k, v in metadata.items() if v is not None}}
+            extra_args["Metadata"] = {k: str(v) for k, v in metadata.items() if v is not None}
+        if content_type:
+            extra_args["ContentType"] = content_type
         if extra_args:
             self._client.upload_file(str(path), self.bucket, key, ExtraArgs=extra_args)
         else:

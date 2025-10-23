@@ -508,7 +508,7 @@ class VideoAutomationStack(Stack):
             lambda_event_sources.S3EventSource(
                 output_bucket,
                 events=[s3.EventType.OBJECT_CREATED],
-                filters=[s3.NotificationKeyFilter(prefix="jobs/final/", suffix=".mp4")],
+                filters=[s3.NotificationKeyFilter(prefix="jobs/final/")],
             )
         )
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -119,18 +120,21 @@ class PipelineWorkflow:
         self._storage.upload_directory(run_dir, context.output_prefix)
 
         final_video_path = result_bundle.final_video
-        final_video_key = None
+        absolute_final_video = None
         if final_video_path:
-            final_video_path = Path(final_video_path)
-            if not final_video_path.is_absolute():
-                final_video_path = run_dir / final_video_path
-            if final_video_path.exists():
-                final_video_key = self._settings.final_video_key(context.job_id, final_video_path.name)
-                metadata = {"job-id": context.job_id}
-                drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
-                if drive_folder:
-                    metadata["drive-folder"] = drive_folder
-                self._storage.upload_file(final_video_path, final_video_key, metadata=metadata)
+            absolute_final_video = Path(final_video_path)
+            if not absolute_final_video.is_absolute():
+                absolute_final_video = run_dir / absolute_final_video
+            if not absolute_final_video.exists():
+                absolute_final_video = None
+
+        drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
+        final_video_key = self._copy_exports_to_final(
+            context.job_id,
+            run_dir,
+            absolute_final_video,
+            drive_folder,
+        )
 
         attributes = {
             "output_bucket": self._settings.output_bucket,
@@ -195,6 +199,57 @@ class PipelineWorkflow:
             )
             self._runner_cache[signature] = runner
         return runner
+
+    def _copy_exports_to_final(
+        self,
+        job_id: str,
+        run_dir: Path,
+        final_video_path: Optional[Path],
+        drive_folder: Optional[str],
+    ) -> Optional[str]:
+        exports_dir = run_dir / "exports"
+        if not exports_dir.exists():
+            if final_video_path:
+                metadata = {"job-id": job_id}
+                if drive_folder:
+                    metadata["drive-folder"] = drive_folder
+                content_type, _ = mimetypes.guess_type(final_video_path.name)
+                key = self._settings.final_video_key(job_id, final_video_path.name)
+                self._storage.upload_file(final_video_path, key, metadata=metadata, content_type=content_type)
+                return key
+            return None
+
+        final_video_key: Optional[str] = None
+        metadata = {"job-id": job_id}
+        if drive_folder:
+            metadata["drive-folder"] = drive_folder
+        resolved_final_video = final_video_path.resolve() if final_video_path else None
+
+        for path in exports_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            relative_name = path.relative_to(exports_dir).as_posix()
+            destination_key = self._settings.final_artifact_key(job_id, relative_name)
+            content_type, _ = mimetypes.guess_type(path.name)
+            self._storage.upload_file(path, destination_key, metadata=metadata, content_type=content_type)
+            if resolved_final_video and path.resolve() == resolved_final_video:
+                legacy_key = self._settings.final_video_key(job_id, path.name)
+                if legacy_key != destination_key:
+                    self._storage.upload_file(path, legacy_key, metadata=metadata, content_type=content_type)
+                final_video_key = legacy_key
+
+        if not final_video_key and final_video_path and final_video_path.exists():
+            fallback_key = self._settings.final_video_key(job_id, final_video_path.name)
+            content_type, _ = mimetypes.guess_type(final_video_path.name)
+            self._storage.upload_file(
+                final_video_path,
+                fallback_key,
+                metadata=metadata,
+                content_type=content_type,
+            )
+            final_video_key = fallback_key
+
+        return final_video_key
 
     def _resolve_drive_folder(self, job_id: str, pipeline_config: Optional[Mapping[str, Any]]) -> Optional[str]:
         if pipeline_config and isinstance(pipeline_config, Mapping):

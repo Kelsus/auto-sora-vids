@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 from typing import Any, Dict, Iterable, List
 
 from gdrive_forwarder.drive import DriveUploader
@@ -32,17 +33,28 @@ class ForwarderApplication:
             if not bucket or not key:
                 logger.warning("Skipping record without bucket/key: %s", record)
                 continue
+            if self._is_legacy_final_key(key):
+                logger.info("Skipping legacy final artifact key %s to avoid duplicate uploads", key)
+                continue
             obj = self._storage.fetch(bucket, key)
             if obj is None:
                 logger.error("Failed to fetch S3 object %s/%s", bucket, key)
                 continue
             file_name = key.split("/")[-1]
+            if not file_name.lower().endswith((".mp4", ".json")):
+                logger.info("Skipping unsupported file type %s from %s/%s", file_name, bucket, key)
+                continue
+            mime_type, _ = mimetypes.guess_type(file_name)
+            if not mime_type and file_name.lower().endswith(".json"):
+                mime_type = "application/json"
+            if not mime_type and file_name.lower().endswith(".mp4"):
+                mime_type = "video/mp4"
             metadata = obj.metadata or {}
             drive_folder = metadata.get("drive-folder") or metadata.get("drive_folder")
             folder_name = drive_folder.strip() if isinstance(drive_folder, str) else None
             if folder_name:
                 logger.info("Uploading %s to Drive subfolder '%s'", file_name, folder_name)
-            self._uploader.upload(file_name, obj.body, folder_name=folder_name)
+            self._uploader.upload(file_name, obj.body, folder_name=folder_name, mime_type=mime_type)
             processed += 1
         return {"processed": processed}
 
@@ -53,6 +65,14 @@ class ForwarderApplication:
             s3_info.get("bucket", {}).get("name"),
             s3_info.get("object", {}).get("key"),
         )
+
+    @staticmethod
+    def _is_legacy_final_key(key: str) -> bool:
+        prefix = "jobs/final/"
+        if not key.startswith(prefix):
+            return False
+        remainder = key[len(prefix) :]
+        return "/" not in remainder
 
 
 def lambda_handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:  # pragma: no cover

@@ -28,7 +28,13 @@ class DriveUploader:
         self._folder_id: str | None = None
         self._drive_id: str | None = None
 
-    def upload(self, file_name: str, data: bytes, folder_name: str | None = None) -> None:
+    def upload(
+        self,
+        file_name: str,
+        data: bytes,
+        folder_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> None:
         credentials = self._load_credentials()
         service = build("drive", "v3", credentials=credentials, cache_discovery=False)
         base_folder_id = self._resolve_base_folder(service)
@@ -43,8 +49,9 @@ class DriveUploader:
                     folder_name,
                     base_folder_id,
                 )
-        media = MediaIoBaseUpload(io.BytesIO(data), mimetype="video/mp4", resumable=False)
-        metadata = {"name": file_name, "parents": [target_folder_id]}
+        effective_mime = mime_type or "application/octet-stream"
+        media = MediaIoBaseUpload(io.BytesIO(data), mimetype=effective_mime, resumable=False)
+        metadata = {"name": file_name, "parents": [target_folder_id], "mimeType": effective_mime}
         service.files().create(
             body=metadata,
             media_body=media,
