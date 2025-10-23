@@ -233,21 +233,19 @@ class PipelineWorkflow:
             content_type, _ = mimetypes.guess_type(path.name)
             self._storage.upload_file(path, destination_key, metadata=metadata, content_type=content_type)
             if resolved_final_video and path.resolve() == resolved_final_video:
-                legacy_key = self._settings.final_video_key(job_id, path.name)
-                if legacy_key != destination_key:
-                    self._storage.upload_file(path, legacy_key, metadata=metadata, content_type=content_type)
-                final_video_key = legacy_key
+                final_video_key = destination_key
 
         if not final_video_key and final_video_path and final_video_path.exists():
-            fallback_key = self._settings.final_video_key(job_id, final_video_path.name)
+            relative_name = final_video_path.name
+            destination_key = self._settings.final_artifact_key(job_id, relative_name)
             content_type, _ = mimetypes.guess_type(final_video_path.name)
             self._storage.upload_file(
                 final_video_path,
-                fallback_key,
+                destination_key,
                 metadata=metadata,
                 content_type=content_type,
             )
-            final_video_key = fallback_key
+            final_video_key = destination_key
 
         return final_video_key
 

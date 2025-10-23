@@ -90,8 +90,8 @@ class RecordingStorage:
         self.snapshots[prefix] = snapshot_dir
         return []
 
-    def upload_file(self, path: Path, key: str, metadata: dict[str, str] | None = None):
-        self.uploaded_files.append((str(path), key, metadata or {}))
+    def upload_file(self, path: Path, key: str, metadata: dict[str, str] | None = None, content_type: str | None = None):
+        self.uploaded_files.append((str(path), key, metadata or {}, content_type))
 
     def download_prefix(self, prefix: str, target_dir: Path):
         src = self.snapshots.get(prefix)

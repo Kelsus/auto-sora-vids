@@ -5,13 +5,24 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Optional
+from types import SimpleNamespace
 
 import boto3
 from botocore.exceptions import ClientError
 from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from googleapiclient.errors import HttpError
+
+try:  # pragma: no cover - dependency provided in Lambda runtime
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+    from googleapiclient.errors import HttpError
+except ModuleNotFoundError:  # pragma: no cover - allows local tests without googleapiclient
+    build = None
+    MediaIoBaseUpload = None
+
+    class HttpError(Exception):
+        def __init__(self, resp=None, content=None, uri=None):
+            super().__init__("HttpError")
+            self.resp = resp or SimpleNamespace(status=None)
 
 
 logger = logging.getLogger(__name__)
@@ -35,6 +46,8 @@ class DriveUploader:
         folder_name: str | None = None,
         mime_type: str | None = None,
     ) -> None:
+        if build is None or MediaIoBaseUpload is None:
+            raise RuntimeError("googleapiclient is required to upload files to Drive")
         credentials = self._load_credentials()
         service = build("drive", "v3", credentials=credentials, cache_discovery=False)
         base_folder_id = self._resolve_base_folder(service)

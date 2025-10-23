@@ -45,7 +45,7 @@ class WorkerSettings:
         return f"jobs/{job_id}/run"
 
     def final_video_key(self, job_id: str, filename: str) -> str:
-        return f"{self.final_video_prefix}/{job_id}-{filename}"
+        return self.final_artifact_key(job_id, filename)
 
     def final_artifact_key(self, job_id: str, relative_name: str) -> str:
         return f"{self.final_artifact_prefix(job_id)}/{relative_name}"

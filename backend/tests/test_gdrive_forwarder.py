@@ -25,41 +25,58 @@ class StubStorage:
 
 class RecordingUploader:
     def __init__(self):
-        self.uploads: list[tuple[str, bytes, str | None]] = []
+        self.uploads: list[tuple[str, bytes, str | None, str | None]] = []
 
-    def upload(self, file_name: str, data: bytes, folder_name: str | None = None) -> None:
-        self.uploads.append((file_name, data, folder_name))
+    def upload(self, file_name: str, data: bytes, folder_name: str | None = None, mime_type: str | None = None) -> None:
+        self.uploads.append((file_name, data, folder_name, mime_type))
 
 
-def test_forwarder_uploads_videos():
+def test_forwarder_uploads_video_and_metadata():
     settings = ForwarderSettings(service_account_parameter="parameter", folder_id="folder")
     storage = StubStorage(
-        {"bucket:jobs/final/video.mp4": S3Object(bucket="bucket", key="jobs/final/video.mp4", body=b"data")}
+        {
+            "bucket:jobs/final/job-1/video.mp4": S3Object(
+                bucket="bucket",
+                key="jobs/final/job-1/video.mp4",
+                body=b"video",
+                metadata={"drive-folder": "DriveA"},
+            ),
+            "bucket:jobs/final/job-1/video.json": S3Object(
+                bucket="bucket",
+                key="jobs/final/job-1/video.json",
+                body=b"{\"key\": \"value\"}",
+                metadata={"drive-folder": "DriveA"},
+            ),
+        }
     )
     uploader = RecordingUploader()
     app = ForwarderApplication(settings=settings, storage=storage, uploader=uploader)
 
     event = {
         "Records": [
-            {"s3": {"bucket": {"name": "bucket"}, "object": {"key": "jobs/final/video.mp4"}}},
+            {"s3": {"bucket": {"name": "bucket"}, "object": {"key": "jobs/final/job-1/video.mp4"}}},
+            {"s3": {"bucket": {"name": "bucket"}, "object": {"key": "jobs/final/job-1/video.json"}}},
             {"s3": {"bucket": {}, "object": {}}},
         ]
     }
 
     response = app.handle(event["Records"])
 
-    assert response == {"processed": 1}
-    assert uploader.uploads == [("video.mp4", b"data", None)]
-    assert storage.requests[0] == ("bucket", "jobs/final/video.mp4")
+    assert response == {"processed": 2}
+    assert uploader.uploads == [
+        ("video.mp4", b"video", "DriveA", "video/mp4"),
+        ("video.json", b"{\"key\": \"value\"}", "DriveA", "application/json"),
+    ]
+    assert storage.requests[0] == ("bucket", "jobs/final/job-1/video.mp4")
 
 
 def test_forwarder_uses_drive_folder_override():
     settings = ForwarderSettings(service_account_parameter="parameter", folder_id="default-folder")
     storage = StubStorage(
         {
-            "bucket:jobs/final/job-video.mp4": S3Object(
+            "bucket:jobs/final/job-2/job-video.mp4": S3Object(
                 bucket="bucket",
-                key="jobs/final/job-video.mp4",
+                key="jobs/final/job-2/job-video.mp4",
                 body=b"data",
                 metadata={"drive-folder": "custom-folder"},
             )
@@ -68,9 +85,13 @@ def test_forwarder_uses_drive_folder_override():
     uploader = RecordingUploader()
     app = ForwarderApplication(settings=settings, storage=storage, uploader=uploader)
 
-    event = {"Records": [{"s3": {"bucket": {"name": "bucket"}, "object": {"key": "jobs/final/job-video.mp4"}}}]}
+    event = {
+        "Records": [
+            {"s3": {"bucket": {"name": "bucket"}, "object": {"key": "jobs/final/job-2/job-video.mp4"}}}
+        ]
+    }
 
     response = app.handle(event["Records"])
 
     assert response == {"processed": 1}
-    assert uploader.uploads == [("job-video.mp4", b"data", "custom-folder")]
+    assert uploader.uploads == [("job-video.mp4", b"data", "custom-folder", "video/mp4")]
