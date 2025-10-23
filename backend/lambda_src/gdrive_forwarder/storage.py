@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -17,6 +17,7 @@ class S3Object:
     bucket: str
     key: str
     body: bytes
+    metadata: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -31,4 +32,5 @@ class S3Reader:
             logger.exception("Unable to fetch S3 object %s/%s", bucket, key)
             return None
         body = response["Body"].read()
-        return S3Object(bucket=bucket, key=key, body=body)
+        metadata = response.get("Metadata") or {}
+        return S3Object(bucket=bucket, key=key, body=body, metadata=metadata)

@@ -58,7 +58,6 @@ class JobIngestApplication:
         return JobRecord(
             job_id=job_id,
             url=job.url,
-            social_media=job.social_media,
             scheduled_datetime=job.scheduled_datetime,
             job_type=job.job_type,
             status=job.status,

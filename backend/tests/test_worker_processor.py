@@ -77,7 +77,7 @@ class StubRunner:
 class RecordingStorage:
     def __init__(self, snapshot_root: Path) -> None:
         self.uploaded_dirs: list[tuple[str, str]] = []
-        self.uploaded_files: list[tuple[str, str]] = []
+        self.uploaded_files: list[tuple[str, str, dict[str, str]]] = []
         self.snapshots: dict[str, Path] = {}
         self.snapshot_root = snapshot_root
 
@@ -90,8 +90,8 @@ class RecordingStorage:
         self.snapshots[prefix] = snapshot_dir
         return []
 
-    def upload_file(self, path: Path, key: str):
-        self.uploaded_files.append((str(path), key))
+    def upload_file(self, path: Path, key: str, metadata: dict[str, str] | None = None):
+        self.uploaded_files.append((str(path), key, metadata or {}))
 
     def download_prefix(self, prefix: str, target_dir: Path):
         src = self.snapshots.get(prefix)
@@ -116,9 +116,13 @@ class RecordingBundleStore:
 class RecordingRepository:
     def __init__(self) -> None:
         self.updates: list[tuple[str, JobStatusUpdate]] = []
+        self.records: dict[str, dict] = {}
 
     def update_status(self, job_id: str, update: JobStatusUpdate) -> None:
         self.updates.append((job_id, update))
+
+    def fetch(self, job_id: str):
+        return self.records.get(job_id)
 
 
 def build_settings(tmp_path: Path) -> WorkerSettings:
@@ -202,9 +206,10 @@ def test_stitch_final_uploads_video_and_completes(tmp_path):
     storage = RecordingStorage(tmp_path / "snapshots")
     store = RecordingBundleStore()
     repo = RecordingRepository()
+    repo.records["story"] = {"metadata": {"pipeline_config": {"drive_folder": "folder-123"}}}
     workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
 
-    metadata = JobMetadata(job_id="story", article_url="https://example.com/story")
+    metadata = JobMetadata(job_id="story", article_url="https://example.com/story", pipeline_config={"drive_folder": "folder-123"})
     context = workflow.generate_prompts(metadata)
     workflow.render_clip(ClipTask(job_context=context, clip_id="clip-1"))
     workflow.render_clip(ClipTask(job_context=context, clip_id="clip-2"))
@@ -213,6 +218,9 @@ def test_stitch_final_uploads_video_and_completes(tmp_path):
 
     assert repo.updates[-1][1].status == "COMPLETED"
     assert storage.uploaded_files  # final video uploaded
+    uploaded_metadata = storage.uploaded_files[-1][2]
+    assert uploaded_metadata.get("job-id") == "story"
+    assert uploaded_metadata.get("drive-folder") == "folder-123"
     assert result["finalVideoKey"].startswith(settings.final_video_prefix)
 
 

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Dict
 
-from infra.lambda_src.gdrive_forwarder.app import ForwarderApplication
-from infra.lambda_src.gdrive_forwarder.settings import ForwarderSettings
-from infra.lambda_src.gdrive_forwarder.storage import S3Object
+root_dir = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(root_dir / "backend" / "lambda_src"))
+sys.path.insert(0, str(root_dir / "backend" / "lambda_src" / "common_layer" / "python"))
+
+from gdrive_forwarder.app import ForwarderApplication
+from gdrive_forwarder.settings import ForwarderSettings
+from gdrive_forwarder.storage import S3Object
 
 
 class StubStorage:
@@ -19,10 +25,10 @@ class StubStorage:
 
 class RecordingUploader:
     def __init__(self):
-        self.uploads: list[tuple[str, bytes]] = []
+        self.uploads: list[tuple[str, bytes, str | None]] = []
 
-    def upload(self, file_name: str, data: bytes) -> None:
-        self.uploads.append((file_name, data))
+    def upload(self, file_name: str, data: bytes, folder_name: str | None = None) -> None:
+        self.uploads.append((file_name, data, folder_name))
 
 
 def test_forwarder_uploads_videos():
@@ -43,5 +49,28 @@ def test_forwarder_uploads_videos():
     response = app.handle(event["Records"])
 
     assert response == {"processed": 1}
-    assert uploader.uploads == [("video.mp4", b"data")]
+    assert uploader.uploads == [("video.mp4", b"data", None)]
     assert storage.requests[0] == ("bucket", "jobs/final/video.mp4")
+
+
+def test_forwarder_uses_drive_folder_override():
+    settings = ForwarderSettings(service_account_parameter="parameter", folder_id="default-folder")
+    storage = StubStorage(
+        {
+            "bucket:jobs/final/job-video.mp4": S3Object(
+                bucket="bucket",
+                key="jobs/final/job-video.mp4",
+                body=b"data",
+                metadata={"drive-folder": "custom-folder"},
+            )
+        }
+    )
+    uploader = RecordingUploader()
+    app = ForwarderApplication(settings=settings, storage=storage, uploader=uploader)
+
+    event = {"Records": [{"s3": {"bucket": {"name": "bucket"}, "object": {"key": "jobs/final/job-video.mp4"}}}]}
+
+    response = app.handle(event["Records"])
+
+    assert response == {"processed": 1}
+    assert uploader.uploads == [("job-video.mp4", b"data", "custom-folder")]

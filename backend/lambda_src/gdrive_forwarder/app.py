@@ -37,7 +37,12 @@ class ForwarderApplication:
                 logger.error("Failed to fetch S3 object %s/%s", bucket, key)
                 continue
             file_name = key.split("/")[-1]
-            self._uploader.upload(file_name, obj.body)
+            metadata = obj.metadata or {}
+            drive_folder = metadata.get("drive-folder") or metadata.get("drive_folder")
+            folder_name = drive_folder.strip() if isinstance(drive_folder, str) else None
+            if folder_name:
+                logger.info("Uploading %s to Drive subfolder '%s'", file_name, folder_name)
+            self._uploader.upload(file_name, obj.body, folder_name=folder_name)
             processed += 1
         return {"processed": processed}
 

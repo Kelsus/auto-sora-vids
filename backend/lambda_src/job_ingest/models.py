@@ -22,7 +22,7 @@ class JobRequest:
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "JobRequest":
-        missing = [field for field in ("url") if not payload.get(field)]
+        missing = [field for field in ("url",) if not payload.get(field)]
         if missing:
             raise ValidationError(f"Missing required fields: {', '.join(missing)}")
 
@@ -57,7 +57,13 @@ class JobRequest:
         if pipeline_config:
             if not isinstance(pipeline_config, Mapping):
                 raise ValidationError("pipeline_config must be an object")
-            metadata["pipeline_config"] = dict(pipeline_config)
+            pipeline_config_dict = dict(pipeline_config)
+            if "drive_folder" in pipeline_config_dict:
+                drive_folder = pipeline_config_dict["drive_folder"]
+                if not isinstance(drive_folder, str) or not drive_folder.strip():
+                    raise ValidationError("pipeline_config.drive_folder must be a non-empty string")
+                pipeline_config_dict["drive_folder"] = drive_folder.strip()
+            metadata["pipeline_config"] = pipeline_config_dict
 
         return cls(
             url=str(payload["url"]),

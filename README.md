@@ -146,7 +146,7 @@ curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs \
 ```
 Jobs transition `PENDING → QUEUED → RUNNING → COMPLETED/FAILED` automatically. The worker stores all run artifacts in the provisioned S3 bucket under `jobs/<jobId>/run/`, and copies the final MP4 into `jobs/final/` (which triggers the Google Drive transfer Lambda).
 
-The optional `pipeline_config` map mirrors the fields in `PipelineConfig`; any keys you include are applied only to that job.
+The optional `pipeline_config` map mirrors the fields in `PipelineConfig`; any keys you include are applied only to that job. Set `pipeline_config.drive_folder` to the name of a subfolder beneath the configured Drive root (`GDRIVE_FOLDER_ID`) when you want the Google Drive forwarder to drop the final MP4 into that location for the job.
 
 ## Troubleshooting
 - `Missing Anthropics API key`: export `ANTHROPIC_API_KEY` or place it in a `.env` file before running the CLI.

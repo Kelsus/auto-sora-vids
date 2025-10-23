@@ -4,7 +4,7 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from aivideomaker.orchestrator import PipelineBundle
 
@@ -126,7 +126,11 @@ class PipelineWorkflow:
                 final_video_path = run_dir / final_video_path
             if final_video_path.exists():
                 final_video_key = self._settings.final_video_key(context.job_id, final_video_path.name)
-                self._storage.upload_file(final_video_path, final_video_key)
+                metadata = {"job-id": context.job_id}
+                drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
+                if drive_folder:
+                    metadata["drive-folder"] = drive_folder
+                self._storage.upload_file(final_video_path, final_video_key, metadata=metadata)
 
         attributes = {
             "output_bucket": self._settings.output_bucket,
@@ -191,3 +195,20 @@ class PipelineWorkflow:
             )
             self._runner_cache[signature] = runner
         return runner
+
+    def _resolve_drive_folder(self, job_id: str, pipeline_config: Optional[Mapping[str, Any]]) -> Optional[str]:
+        if pipeline_config and isinstance(pipeline_config, Mapping):
+            drive_folder = pipeline_config.get("drive_folder")
+            if isinstance(drive_folder, str) and drive_folder.strip():
+                return drive_folder.strip()
+        record = self._repository.fetch(job_id)
+        if not record:
+            return None
+        metadata = record.get("metadata")
+        if isinstance(metadata, Mapping):
+            pipeline_overrides = metadata.get("pipeline_config")
+            if isinstance(pipeline_overrides, Mapping):
+                drive_folder = pipeline_overrides.get("drive_folder")
+                if isinstance(drive_folder, str) and drive_folder.strip():
+                    return drive_folder.strip()
+        return None

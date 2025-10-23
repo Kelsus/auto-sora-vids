@@ -62,6 +62,26 @@ def test_job_request_accepts_pipeline_config_override():
     assert job.metadata["pipeline_config"] == {"media_provider": "veo", "sora_model": "sora-3"}
 
 
+def test_job_request_accepts_drive_folder_pipeline_config():
+    payload = {
+        "url": "https://example.com/story",
+        "scheduled_datetime": "2024-08-12T18:00:00Z",
+        "pipeline_config": {"drive_folder": "folder-123"},
+    }
+    job = JobRequest.from_payload(payload)
+    assert job.metadata["pipeline_config"]["drive_folder"] == "folder-123"
+
+
+def test_job_request_requires_string_drive_folder_when_present():
+    payload = {
+        "url": "https://example.com/story",
+        "scheduled_datetime": "2024-08-12T18:00:00Z",
+        "pipeline_config": {"drive_folder": 42},
+    }
+    with pytest.raises(ValidationError):
+        JobRequest.from_payload(payload)
+
+
 def test_job_request_missing_field():
     with pytest.raises(ValidationError):
         JobRequest.from_payload({"url": "https://example.com"})
