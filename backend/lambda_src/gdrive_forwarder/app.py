@@ -21,8 +21,8 @@ class ForwarderApplication:
         self._settings = settings or ForwarderSettings.from_env()
         self._storage = storage or S3Reader()
         self._uploader = uploader or DriveUploader(
-            parameter_name=self._settings.service_account_parameter,
-            folder_id=self._settings.folder_id,
+            service_account_parameter=self._settings.service_account_parameter,
+            folder_identifier=self._settings.folder_id,
         )
 
     def handle(self, records: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
