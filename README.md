@@ -11,6 +11,7 @@ Pipeline for turning news articles into suspenseful, controversy-led video scrip
 - Outputs structured prompts including transcript, visual direction, audio guidance, and voice directives.
 - Dry-run media pipeline that stubs Sora 2 clip generation and prepares a unified voice transcript for cameo capture.
 - Hooks for stitching clips and leveling audio once real media assets exist.
+- Karaoke captions (ASS/SSA) with word-level highlight when alignment is available; burned-in via ffmpeg/libass.
 
 ## Project Layout
 ```
@@ -37,6 +38,8 @@ src/aivideomaker/
    export ANTHROPIC_API_KEY="sk-ant-..."
    ```
    You can also create a `.env` file with this key; the CLI loads it automatically.
+   Before assuming a key is missing, double-check the repository `.env` file—many
+   local setups stash credentials there so they are picked up without touching your shell.
 
    To hit the real Sora API, add an OpenAI key with Sora 2 access:
    ```bash
@@ -61,11 +64,17 @@ src/aivideomaker/
    ```
    That variant stops after prompt generation and simply writes the JSON bundle for inspection.
 
-   Once satisfied with the prompts, you can render them later from the saved JSON bundle:
+Once satisfied with the prompts, you can render them later from the saved JSON bundle:
    ```bash
    aivideo --prompt-bundle data/runs/example-article/bundle.json --dry-run   # placeholder artifacts
    aivideo --prompt-bundle data/runs/example-article/bundle.json              # contacts Sora if enabled
    ```
+
+### Captions
+- When ElevenLabs timestamps are enabled and narration is rendered (non-dry-run), the pipeline creates `exports/captions.ass` and burns it into the final video with libass. Active word is highlighted (yellow), with white text and black outline.
+- To customize fonts, drop font files into `data/runs/<slug>/exports/fonts/`. The burner passes `fontsdir` to ffmpeg so libass can discover them.
+- Reference burn-in command (standalone):
+  `ffmpeg -i input.mp4 -vf "subtitles=karaoke.ass:fontsdir=./fonts" -c:v libx264 -crf 18 -preset slow -c:a copy output.mp4`
 
 4. **Enable real integrations** (future work):
    - Add alternate LLM backends (e.g., OpenAI) or multi-pass planning prompts if needed.
@@ -138,7 +147,9 @@ curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs \
   -d '{
         "url": "s3://my-bundles/how-generative-engine-optimization-geo-rewrites-the-rules/bundle.json",
         "scheduled_datetime": "2024-08-15T21:30:00Z",
+        "job_type": "IMMEDIATE" | "SCHEDULED",
         "pipeline_config": {
+          "drive_folder": "Kelsus" | "Korsair" | "SearchClick",
           "media_provider": "veo",
           "veo_aspect_ratio": "1:1"
         }
@@ -147,6 +158,10 @@ curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs \
 Jobs transition `PENDING → QUEUED → RUNNING → COMPLETED/FAILED` automatically. The worker stores all run artifacts in the provisioned S3 bucket under `jobs/<jobId>/run/`, and copies the final MP4 into `jobs/final/` (which triggers the Google Drive transfer Lambda).
 
 The optional `pipeline_config` map mirrors the fields in `PipelineConfig`; any keys you include are applied only to that job. Set `pipeline_config.drive_folder` to the name of a subfolder beneath the configured Drive root (`GDRIVE_FOLDER_ID`) when you want the Google Drive forwarder to drop the final MP4 into that location for the job.
+
+## Development Status (captions branch)
+- Karaoke captions (ASS/SSA) with per-word highlighting are implemented and burned via ffmpeg/libass when ElevenLabs alignment is available.
+- See `docs/TODO.md` for current tasks and next steps on caption styling/configuration and alternate timestamp sources (WhisperX/AssemblyAI).
 
 ## Troubleshooting
 - `Missing Anthropics API key`: export `ANTHROPIC_API_KEY` or place it in a `.env` file before running the CLI.
