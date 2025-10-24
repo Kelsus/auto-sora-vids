@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 import random
 import time
 from collections import deque
 from pathlib import Path
-from typing import Deque, Iterable, Optional, Tuple
+from typing import Any, Deque, Dict, Iterable, Optional, Tuple
 from urllib.parse import urlparse
 
 from google import genai
@@ -22,6 +23,13 @@ try:
     from google.cloud import storage
 except ImportError:  # pragma: no cover - optional dependency for Vertex downloads
     storage = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency for SSM lookups
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+except ImportError:  # pragma: no cover - worker environment should provide boto3
+    boto3 = None  # type: ignore[assignment]
+    BotoCoreError = ClientError = Exception  # type: ignore[assignment]
 
 from aivideomaker.prompt_builder.model import MediaPrompt
 
@@ -65,6 +73,7 @@ class VeoClient:
         self.project = project
         self.location = location or "us-central1"
         self.credentials_path = Path(credentials_path) if credentials_path else None
+        self.credentials_parameter = "/auto-sora/veo-service-account"
         self._credentials = None
         self.client = self._build_client()
         self._supports_seed = bool(getattr(getattr(self.client, "_api_client", None), "vertexai", False)) if self.client else False
@@ -291,22 +300,30 @@ class VeoClient:
         credentials = None
         project = self.project
 
+        scope = "https://www.googleapis.com/auth/cloud-platform"
+
         if self.credentials_path and self.credentials_path.exists():
             logger.info("Loading Vertex credentials from %s", self.credentials_path)
             credentials = service_account.Credentials.from_service_account_file(
                 str(self.credentials_path),
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                scopes=[scope],
             )
             project = project or getattr(credentials, "project_id", None)
+        elif self.credentials_parameter:
+            logger.info("Loading Vertex credentials from SSM parameter %s", self.credentials_parameter)
+            info = self._load_credentials_from_parameter(self.credentials_parameter)
+            credentials = service_account.Credentials.from_service_account_info(
+                info,
+                scopes=[scope],
+            )
+            project = project or info.get("project_id") or getattr(credentials, "project_id", None)
         else:
             logger.info("Falling back to application default credentials for Vertex")
             if google_auth is None:
                 raise RuntimeError(
                     "google.auth is required for Vertex AI authentication; install google-auth."
                 )
-            credentials, default_project = google_auth.default(
-                scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
+            credentials, default_project = google_auth.default(scopes=[scope])
             project = project or default_project
 
         if not project:
@@ -321,6 +338,32 @@ class VeoClient:
             location=self.location,
             credentials=credentials,
         )
+
+    def _load_credentials_from_parameter(self, parameter_name: str) -> Dict[str, Any]:
+        if boto3 is None:
+            raise RuntimeError(
+                "boto3 is required to load Vertex credentials from SSM; ensure it is installed in the runtime."
+            )
+        client = boto3.client("ssm")
+        try:  # pragma: no cover - requires AWS connectivity
+            response = client.get_parameter(Name=parameter_name, WithDecryption=True)
+        except (ClientError, BotoCoreError) as exc:  # pragma: no cover - runtime dependency
+            raise RuntimeError(f"Failed to read SSM parameter {parameter_name}") from exc
+        parameter = response.get("Parameter") or {}
+        value = parameter.get("Value")
+        if not value:
+            raise RuntimeError(f"SSM parameter {parameter_name} did not contain a value")
+        try:
+            data = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"SSM parameter {parameter_name} does not contain valid JSON service-account credentials"
+            ) from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                f"SSM parameter {parameter_name} must contain a JSON object with service-account credentials"
+            )
+        return data
 
     def _save_vertex_video(self, video_asset: types.Video, target: Path) -> None:
         if video_asset is None:

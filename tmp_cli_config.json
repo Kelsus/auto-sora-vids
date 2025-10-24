@@ -1,0 +1,7 @@
+{
+  "enable_script_review": false,
+  "require_human_approval": false,
+  "media_provider": "veo",
+  "veo_model": "veo-3.1-generate-preview",
+  "veo_max_wait": 2400.0
+}
