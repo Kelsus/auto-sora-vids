@@ -422,7 +422,24 @@ class VideoAutomationStack(Stack):
         )
         stitch_task.add_catch(failure_chain, result_path="$.error")
 
-        workflow_definition = initialize_state.next(generate_prompts_task).next(render_clips_map).next(stitch_task)
+        generate_captions_task = tasks.LambdaInvoke(
+            self,
+            "GenerateCaptions",
+            lambda_function=worker_lambda,
+            payload=sfn.TaskInput.from_object(
+                {
+                    "action": "GENERATE_CAPTIONS",
+                    "jobContext.$": "$.jobContext",
+                }
+            ),
+            result_path="$.captionsResult",
+            payload_response_only=True,
+        )
+        generate_captions_task.add_catch(failure_chain, result_path="$.error")
+
+        workflow_definition = (
+            initialize_state.next(generate_prompts_task).next(render_clips_map).next(stitch_task).next(generate_captions_task)
+        )
         state_machine = sfn.StateMachine(
             self,
             "VideoJobStateMachine",

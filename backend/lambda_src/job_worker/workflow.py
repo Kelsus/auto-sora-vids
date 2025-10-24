@@ -4,9 +4,13 @@ import json
 import logging
 import mimetypes
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
+from imageio_ffmpeg import get_ffmpeg_exe
+
+from aivideomaker.captions.ass_builder import write_karaoke_ass
 from aivideomaker.orchestrator import PipelineBundle
 
 from job_worker.bundle_store import BundleStore
@@ -143,9 +147,95 @@ class PipelineWorkflow:
         if final_video_key:
             attributes["final_video_key"] = final_video_key
 
-        self._repository.update_status(context.job_id, JobStatusUpdate(status="COMPLETED", attributes=attributes))
+        attributes["error_message"] = None
+        attributes["error_message"] = None
+        self._repository.update_status(context.job_id, JobStatusUpdate(status="RUNNING", attributes=attributes))
         logger.info("Job %s completed", context.job_id)
         return {"finalVideoKey": final_video_key}
+
+    def generate_captions(self, context: JobContext) -> Dict[str, Any]:
+        self._refresh_local_run_dir(context.job_id, context.output_prefix)
+        bundle = self._bundle_store.load(context.bundle_key)
+        if not bundle.narration_alignment_payload:
+            logger.info("Skipping caption generation for job %s; no alignment payload", context.job_id)
+            self._repository.update_status(
+                context.job_id,
+                JobStatusUpdate(
+                    status="COMPLETED",
+                    attributes={
+                        "output_bucket": self._settings.output_bucket,
+                        "output_prefix": context.output_prefix,
+                        "captions_ass_key": None,
+                        "error_message": None,
+                    },
+                ),
+            )
+            return {"status": "SKIPPED"}
+
+        run_dir = self._local_run_dir(context.job_id)
+        export_dir = run_dir / "exports"
+        play_res = self._resolve_caption_play_res(context.pipeline_config)
+        captions_path = write_karaoke_ass(
+            script=bundle.script,
+            alignment=bundle.narration_alignment_payload,
+            chunks=bundle.chunks,
+            export_dir=export_dir,
+            play_res=play_res,
+        )
+
+        try:
+            relative_captions = captions_path.relative_to(run_dir)
+        except ValueError:
+            relative_captions = captions_path
+
+        updated_bundle = bundle.model_copy(update={"captions_ass_path": relative_captions})
+        self._write_bundle(run_dir, updated_bundle)
+        self._bundle_store.save(context.bundle_key, updated_bundle)
+
+        absolute_final_video = None
+        if updated_bundle.final_video:
+            absolute_final_video = Path(updated_bundle.final_video)
+            if not absolute_final_video.is_absolute():
+                absolute_final_video = run_dir / absolute_final_video
+            if not absolute_final_video.exists():
+                absolute_final_video = None
+
+        drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
+        if absolute_final_video:
+            self._burn_captions_into_video(absolute_final_video, captions_path, export_dir)
+
+        self._storage.upload_directory(run_dir, context.output_prefix)
+
+        final_video_key = self._copy_exports_to_final(context.job_id, run_dir, absolute_final_video, drive_folder)
+
+        try:
+            captions_relative_export = captions_path.relative_to(export_dir).as_posix()
+        except ValueError:
+            try:
+                captions_relative_export = captions_path.relative_to(run_dir).as_posix()
+            except ValueError:
+                captions_relative_export = captions_path.name
+
+        final_captions_key = self._settings.final_artifact_key(context.job_id, captions_relative_export)
+        logger.info("Generated captions for job %s at %s", context.job_id, captions_path)
+
+        attributes = {
+            "output_bucket": self._settings.output_bucket,
+            "output_prefix": context.output_prefix,
+            "captions_ass_key": final_captions_key,
+            "error_message": None,
+        }
+        if final_video_key:
+            attributes["final_video_key"] = final_video_key
+        self._repository.update_status(
+            context.job_id,
+            JobStatusUpdate(status="COMPLETED", attributes=attributes),
+        )
+
+        return {
+            "captionsAssPath": str(relative_captions),
+            "captionsFinalKey": final_captions_key,
+        }
 
     def mark_failed(self, context: JobContext, error: Dict[str, Any] | None = None) -> None:
         message = "Unknown error"
@@ -167,6 +257,36 @@ class PipelineWorkflow:
 
     def _local_run_dir(self, job_id: str) -> Path:
         return self._settings.data_root / job_id
+
+    def _resolve_caption_play_res(self, overrides: Optional[Mapping[str, Any]]) -> tuple[int, int]:
+        candidate: Optional[str] = None
+        if overrides and isinstance(overrides, Mapping):
+            size_override = overrides.get("sora_size")
+            if isinstance(size_override, str):
+                candidate = size_override
+        if candidate:
+            parsed = self._parse_resolution(candidate)
+            if parsed:
+                return parsed
+        try:
+            runner = self._get_runner(overrides or {})
+            orchestrator = runner._ensure_orchestrator()  # type: ignore[attr-defined]
+            size_value = getattr(orchestrator.config, "sora_size", None)
+            if isinstance(size_value, str):
+                parsed = self._parse_resolution(size_value)
+                if parsed:
+                    return parsed
+        except Exception:  # pragma: no cover - defensive guard
+            pass
+        return (720, 1280)
+
+    @staticmethod
+    def _parse_resolution(value: str) -> Optional[tuple[int, int]]:
+        try:
+            width_str, height_str = value.lower().split("x", 1)
+            return int(width_str), int(height_str)
+        except Exception:
+            return None
 
     def _write_bundle(self, run_dir: Path, bundle: PipelineBundle) -> None:
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -248,6 +368,65 @@ class PipelineWorkflow:
             final_video_key = destination_key
 
         return final_video_key
+
+    def _burn_captions_into_video(self, video_path: Path, captions_path: Path, export_dir: Path) -> None:
+        temp_output = video_path.with_suffix(".captions.mp4")
+        fonts_dir = export_dir / "fonts"
+        filter_expr = f"subtitles={captions_path}"
+        if fonts_dir.exists() and fonts_dir.is_dir():
+            filter_expr = f"{filter_expr}:fontsdir={fonts_dir}"
+
+        ffmpeg_binary = get_ffmpeg_exe()
+        base_cmd = [
+            ffmpeg_binary,
+            "-y",
+            "-i",
+            str(video_path),
+            "-vf",
+            filter_expr,
+            "-c:v",
+            "libx264",
+            "-crf",
+            "18",
+            "-preset",
+            "slow",
+            "-movflags",
+            "+faststart",
+        ]
+        cmd_with_audio = base_cmd + [
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c:a",
+            "copy",
+            str(temp_output),
+        ]
+        cmd_video_only = base_cmd + [
+            str(temp_output),
+        ]
+
+        try:
+            subprocess.run(
+                cmd_with_audio,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError as exc:
+            logger.warning(
+                "Failed to preserve original audio while burning captions; retrying without audio. ffmpeg stderr: %s",
+                exc.stderr.decode("utf-8", errors="ignore"),
+            )
+            subprocess.run(
+                cmd_video_only,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+        video_path.unlink()
+        temp_output.rename(video_path)
 
     def _resolve_drive_folder(self, job_id: str, pipeline_config: Optional[Mapping[str, Any]]) -> Optional[str]:
         if pipeline_config and isinstance(pipeline_config, Mapping):

@@ -100,21 +100,32 @@ class JobsRepository:
 
     def update_status(self, job_id: str, status: str, attributes: Dict[str, Any]) -> None:
         now_iso = utc_now_iso()
-        expression_parts = ["#s = :status", "updated_at = :now"]
+        set_parts = ["#s = :status", "updated_at = :now"]
+        remove_names: List[str] = []
         attribute_names: Dict[str, str] = {"#s": "status"}
         attribute_values: Dict[str, Any] = {":status": status, ":now": now_iso}
 
-        for idx, (key, value) in enumerate(attributes.items()):
-            name_placeholder = f"#f{idx}"
-            value_placeholder = f":v{idx}"
-            expression_parts.append(f"{name_placeholder} = {value_placeholder}")
+        value_index = 0
+        name_index = 0
+        for key, value in attributes.items():
+            name_placeholder = f"#f{name_index}"
             attribute_names[name_placeholder] = key
+            name_index += 1
+            if value is None:
+                remove_names.append(name_placeholder)
+                continue
+            value_placeholder = f":v{value_index}"
+            value_index += 1
+            set_parts.append(f"{name_placeholder} = {value_placeholder}")
             attribute_values[value_placeholder] = value
 
         try:
+            expression = "SET " + ", ".join(set_parts)
+            if remove_names:
+                expression += " REMOVE " + ", ".join(remove_names)
             self._table.update_item(
                 Key={"jobId": job_id},
-                UpdateExpression="SET " + ", ".join(expression_parts),
+                UpdateExpression=expression,
                 ExpressionAttributeNames=attribute_names,
                 ExpressionAttributeValues=attribute_values,
             )

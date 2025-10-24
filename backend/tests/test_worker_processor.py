@@ -16,11 +16,23 @@ from job_worker.workflow import PipelineWorkflow
 
 
 class FakeBundle:
-    def __init__(self, slug: str, clip_ids: list[str], sora_assets: list[Path] | None = None, final_video: Path | None = None):
+    def __init__(
+        self,
+        slug: str,
+        clip_ids: list[str],
+        sora_assets: list[Path] | None = None,
+        final_video: Path | None = None,
+        captions_ass_path: Path | None = None,
+        narration_alignment_payload: dict | None = None,
+    ):
         self.article = SimpleNamespace(slug=slug)
         self.prompts = SimpleNamespace(media_prompts=[SimpleNamespace(chunk_id=cid) for cid in clip_ids])
         self.sora_assets = sora_assets or []
         self.final_video = final_video
+        self.captions_ass_path = captions_ass_path
+        self.narration_alignment_payload = narration_alignment_payload
+        self.script = SimpleNamespace(full_transcript="")
+        self.chunks = SimpleNamespace(chunks=[])
 
     def model_dump(self, mode: str = "json"):
         return {
@@ -28,6 +40,8 @@ class FakeBundle:
             "prompts": [prompt.chunk_id for prompt in self.prompts.media_prompts],
             "sora_assets": [str(path) for path in self.sora_assets],
             "final_video": str(self.final_video) if self.final_video else None,
+            "captions_ass_path": str(self.captions_ass_path) if self.captions_ass_path else None,
+            "narration_alignment_payload": self.narration_alignment_payload,
         }
 
     def model_copy(self, update=None):
@@ -36,6 +50,8 @@ class FakeBundle:
             clip_ids=[prompt.chunk_id for prompt in self.prompts.media_prompts],
             sora_assets=list(self.sora_assets),
             final_video=self.final_video,
+            captions_ass_path=self.captions_ass_path,
+            narration_alignment_payload=self.narration_alignment_payload,
         )
         if update:
             for key, value in update.items():
@@ -71,7 +87,14 @@ class StubRunner:
         final_path = self.tmp_path / bundle.article.slug / "exports" / f"{bundle.article.slug}.mp4"
         final_path.parent.mkdir(parents=True, exist_ok=True)
         final_path.write_text("video")
-        return FakeBundle(bundle.article.slug, [p.chunk_id for p in bundle.prompts.media_prompts], sora_assets=bundle.sora_assets, final_video=final_path)
+        return FakeBundle(
+            bundle.article.slug,
+            [p.chunk_id for p in bundle.prompts.media_prompts],
+            sora_assets=bundle.sora_assets,
+            final_video=final_path,
+            captions_ass_path=bundle.captions_ass_path,
+            narration_alignment_payload=bundle.narration_alignment_payload,
+        )
 
 
 class RecordingStorage:
@@ -216,12 +239,65 @@ def test_stitch_final_uploads_video_and_completes(tmp_path):
 
     result = workflow.stitch_final(context)
 
-    assert repo.updates[-1][1].status == "COMPLETED"
+    assert repo.updates[-1][1].status == "RUNNING"
     assert storage.uploaded_files  # final video uploaded
     uploaded_metadata = storage.uploaded_files[-1][2]
     assert uploaded_metadata.get("job-id") == "story"
     assert uploaded_metadata.get("drive-folder") == "folder-123"
     assert result["finalVideoKey"].startswith(settings.final_video_prefix)
+
+
+def test_generate_captions_skips_without_alignment(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    metadata = JobMetadata(job_id="story", article_url="https://example.com/story")
+    context = workflow.generate_prompts(metadata)
+
+    result = workflow.generate_captions(context)
+
+    assert result["status"] == "SKIPPED"
+
+
+def test_generate_captions_updates_status_with_alignment(tmp_path, monkeypatch):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    runner.bundle.narration_alignment_payload = {"alignment": {"characters": ["a"], "character_start_times_seconds": [0.0], "character_end_times_seconds": [0.5]}}
+    runner.bundle.script = SimpleNamespace(full_transcript="a")
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    metadata = JobMetadata(job_id="story", article_url="https://example.com/story")
+    context = workflow.generate_prompts(metadata)
+
+    workflow.render_clip(ClipTask(job_context=context, clip_id="clip-1"))
+    workflow.render_clip(ClipTask(job_context=context, clip_id="clip-2"))
+    workflow.stitch_final(context)
+
+    def fake_write_karaoke_ass(**kwargs):
+        export_dir = kwargs["export_dir"]
+        captions_path = export_dir / "captions.ass"
+        captions_path.parent.mkdir(parents=True, exist_ok=True)
+        captions_path.write_text("dummy")
+        return captions_path
+
+    monkeypatch.setattr("job_worker.workflow.write_karaoke_ass", fake_write_karaoke_ass)
+
+    monkeypatch.setattr("job_worker.workflow.PipelineWorkflow._burn_captions_into_video", lambda *args, **kwargs: None)
+
+    result = workflow.generate_captions(context)
+
+    assert result["captionsAssPath"].endswith("captions.ass")
+    assert repo.updates[-1][1].status == "COMPLETED"
+    latest_attrs = repo.updates[-1][1].attributes
+    assert latest_attrs["captions_ass_key"].endswith("captions.ass")
+    assert "error_message" in latest_attrs and latest_attrs["error_message"] is None
 
 
 def test_mark_failed_records_status(tmp_path):

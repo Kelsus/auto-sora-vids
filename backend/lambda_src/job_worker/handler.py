@@ -30,6 +30,12 @@ def handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:  # pragma: 
         result["jobId"] = job_context.job_id
         return result
 
+    if action == "GENERATE_CAPTIONS":
+        job_context = JobContext.from_payload(event["jobContext"])
+        result = workflow.generate_captions(job_context)
+        result["jobId"] = job_context.job_id
+        return result
+
     if action == "MARK_FAILED":
         job_context_payload = event.get("jobContext")
         if job_context_payload:
