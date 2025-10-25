@@ -39,9 +39,9 @@ Next steps
 - [x] Add per-beat metadata (`intent`, `visual.type`, negations, QC allowances, caption routing) to existing bundle generator.
 
 ## 2. Strengthen prompt + asset planning
-- [ ] Create reusable Sora prompt presets (8–10) aligned with style bible and embed default negations (no text/graphs/split-screen).
+- [x] Create reusable Sora prompt presets (8–10) aligned with style bible and embed default negations (no text/graphs/split-screen).
 - [x] Implement beat-to-prompt mapping that selects presets based on `visual.type` and enforces min duration targets from `beats_meta_defaults`.
-- [ ] Introduce prompt linting to ensure every request carries negative constraints and camera grammar.
+- [x] Introduce prompt linting to ensure every request carries negative constraints and camera grammar.
 
 ## 3. Add alternative visual tracks
 - [ ] Build still-motion module for `visual.type == "still_motion"` (Ken Burns/parallax from curated stills library).

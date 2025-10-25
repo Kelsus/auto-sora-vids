@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from aivideomaker.article_ingest.model import ArticleBundle
@@ -7,6 +8,63 @@ from aivideomaker.chunker.model import ChunkPlan
 from aivideomaker.script_engine.model import Beat, BeatQCRules, BeatVisualSpec, ScriptPlan
 
 from .model import MediaPrompt, MediaPromptBundle, VoiceDirective
+
+
+@dataclass(frozen=True)
+class PromptPreset:
+    preset_id: str
+    visual_type: str
+    template: str
+
+
+PROMPT_PRESETS: dict[str, PromptPreset] = {
+    "docu_tension_closeup": PromptPreset(
+        preset_id="docu_tension_closeup",
+        visual_type="cinematic_broll",
+        template=(
+            "Intimate handheld close-up inside {subject_context}, highlighting {focus_phrase}. "
+            "Natural lighting, shallow depth of field, subtle film grain, observing without narration presence."
+        ),
+    ),
+    "docu_environment_wide": PromptPreset(
+        preset_id="docu_environment_wide",
+        visual_type="cinematic_broll",
+        template=(
+            "Wide documentary frame capturing {subject_context} in context, steady slow push to reveal scale. "
+            "Real-world textures, ambient motion, no staged actors."
+        ),
+    ),
+    "docu_resolution_medium": PromptPreset(
+        preset_id="docu_resolution_medium",
+        visual_type="cinematic_broll",
+        template=(
+            "Medium documentary shot that resolves the tension around {focus_phrase}. "
+            "Camera remains stable, single continuous move, grounded realism."
+        ),
+    ),
+    "still_motion_default": PromptPreset(
+        preset_id="still_motion_default",
+        visual_type="still_motion",
+        template=(
+            "High-resolution archival still of {focus_phrase} with gentle parallax and depth layering. "
+            "Soft lighting, micro dust motes, respect the original texture."
+        ),
+    ),
+    "chart_metaphor_default": PromptPreset(
+        preset_id="chart_metaphor_default",
+        visual_type="chart",
+        template=(
+            "Abstract macro shot symbolizing data insight about {focus_phrase}: flowing particles, clean gradients, "
+            "subtle glow, no literal charts or text."
+        ),
+    ),
+}
+
+TYPE_DEFAULT_PRESETS: dict[str, str] = {
+    "cinematic_broll": "docu_environment_wide",
+    "still_motion": "still_motion_default",
+    "chart": "chart_metaphor_default",
+}
 
 
 class MediaPromptBuilder:
@@ -32,6 +90,7 @@ class MediaPromptBuilder:
             visual_prompt = self._visual_prompt(article, beat, chunk.estimated_duration_sec)
             negative_prompt = self._negative_prompt(beat)
             audio_prompt = self._audio_prompt(beat)
+            visual_prompt, negative_prompt = self._lint_prompt(beat, visual_prompt, negative_prompt)
             voice_directive = (
                 VoiceDirective(voice_id=self.default_voice)
                 if self.default_voice
@@ -71,12 +130,19 @@ class MediaPromptBuilder:
         visual_spec: BeatVisualSpec | None = beat.visual
         qc: BeatQCRules | None = beat.qc
 
+        preset_lines: list[str] = []
+        preset = self._select_preset(beat)
+        if preset:
+            preset_lines.append(
+                preset.template.format(
+                    subject_context=self._subject_context(article),
+                    focus_phrase=self._focus_phrase(beat),
+                )
+            )
+
         shot_instructions: list[str] = []
         if visual_spec:
             shot_instructions.extend(self._visual_type_instructions(visual_spec))
-            if visual_spec.macro:
-                shot_instructions.append(visual_spec.macro)
-
         shot_instructions.append("Vertical 9:16 frame, cinematic realism.")
 
         if self.lens_hint:
@@ -97,6 +163,7 @@ class MediaPromptBuilder:
         if duration < 1.5:
             shot_instructions.append("Extend action to sustain at least 1.5 seconds of unique motion.")
 
+        parts.extend(preset_lines)
         parts.append(" ".join(shot_instructions))
         return " ".join(part.strip() for part in parts if part)
 
@@ -141,6 +208,37 @@ class MediaPromptBuilder:
                     flattened.append(part)
         return ", ".join(flattened) if flattened else None
 
+    def _lint_prompt(
+        self,
+        beat: Beat,
+        visual_prompt: str,
+        negative_prompt: Optional[str],
+    ) -> tuple[str, Optional[str]]:
+        if "single continuous" not in visual_prompt.lower():
+            visual_prompt = visual_prompt.strip() + " Single continuous shot, no split screens or overlays."
+        if "vertical" not in visual_prompt.lower():
+            visual_prompt = visual_prompt.strip() + " Vertical 9:16 composition."
+
+        required_negatives = []
+        qc = beat.qc
+        if qc is None or not qc.allow_split_screen:
+            required_negatives.extend(["split screen", "side-by-side layout"])
+        if qc is None or not qc.allow_text:
+            required_negatives.extend(["text", "captions", "subtitles"])
+        if qc is None or not qc.allow_numbers:
+            required_negatives.extend(["numbers", "digits", "charts"])
+
+        current_negatives = []
+        if negative_prompt:
+            current_negatives = [part.strip() for part in negative_prompt.split(",") if part.strip()]
+        self._extend_unique(current_negatives, required_negatives)
+
+        if not current_negatives:
+            negative_prompt = None
+        else:
+            negative_prompt = ", ".join(dict.fromkeys(current_negatives))
+        return visual_prompt.strip(), negative_prompt
+
     # ------------------------------------------------------------------
     # Internal utilities
     # ------------------------------------------------------------------
@@ -173,3 +271,34 @@ class MediaPromptBuilder:
                 continue
             target.append(normalized)
             seen.add(normalized)
+
+    def _select_preset(self, beat: Beat) -> Optional[PromptPreset]:
+        visual_spec = beat.visual
+        if visual_spec and visual_spec.macro:
+            preset = PROMPT_PRESETS.get(visual_spec.macro)
+            if preset:
+                return preset
+
+        if visual_spec:
+            default_id = TYPE_DEFAULT_PRESETS.get(visual_spec.type.lower())
+            if default_id and default_id in PROMPT_PRESETS:
+                return PROMPT_PRESETS[default_id]
+
+        # Fallback to cinematic default if nothing else matches.
+        return PROMPT_PRESETS.get(TYPE_DEFAULT_PRESETS.get("cinematic_broll", ""))
+
+    def _subject_context(self, article: ArticleBundle) -> str:
+        title = article.article.metadata.title
+        if title:
+            return title
+        source = article.article.metadata.source or "the story"
+        return source
+
+    def _focus_phrase(self, beat: Beat) -> str:
+        if beat.visual_seed:
+            return beat.visual_seed
+        transcript = beat.transcript.strip()
+        if not transcript:
+            return "the topic"
+        sentence = transcript.split(".")[0]
+        return sentence[:140]
