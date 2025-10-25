@@ -44,8 +44,8 @@ Next steps
 - [x] Introduce prompt linting to ensure every request carries negative constraints and camera grammar.
 
 ## 3. Add alternative visual tracks
-- [ ] Build still-motion module for `visual.type == "still_motion"` (Ken Burns/parallax from curated stills library).
-- [ ] Implement chart renderer for `visual.type == "chart"` using bundle `chart_specs` (e.g., Vega-Lite → MP4/PNG).
+- [x] Build still-motion module for `visual.type == "still_motion"` (Ken Burns/parallax from curated stills library).
+- [x] Implement chart renderer for `visual.type == "chart"` using bundle `chart_specs` (e.g., Vega-Lite → MP4/PNG).
 - [ ] Add asset caching layer so repeated beats can reuse approved Sora clips or charts.
 
 ## 4. Automated visual QC

@@ -19,23 +19,24 @@ from aivideomaker.article_ingest.service import ArticleIngestor
 from aivideomaker.chunker.model import ChunkPlan
 from aivideomaker.chunker.planner import ChunkPlanner
 from aivideomaker.prompt_builder.builder import MediaPromptBuilder
-from aivideomaker.prompt_builder.model import MediaPromptBundle
+from aivideomaker.prompt_builder.model import MediaPrompt, MediaPromptBundle
 from aivideomaker.script_engine.engine import ScriptEngine
 from aivideomaker.script_engine.llm import ClaudeLLM, EchoLLM, LLMClient
-from aivideomaker.script_engine.model import (
-    BeatQCRules,
-    BeatVisualSpec,
-    ScriptPlan,
-    SocialCaption,
-)
+from aivideomaker.script_engine.model import Beat, BeatQCRules, BeatVisualSpec, ScriptPlan, SocialCaption
+from aivideomaker.script_engine.utils import load_json_with_repair
 from aivideomaker.script_engine.reviewer import ScriptReviewDecision, ScriptReviewer
+from aivideomaker.media_pipeline.chart_renderer import ChartRenderer
 from aivideomaker.media_pipeline.elevenlabs_client import ElevenLabsClient
 from aivideomaker.media_pipeline.sora_client import SoraClient
+from aivideomaker.media_pipeline.still_image_client import StillImageClient
 from aivideomaker.media_pipeline.veo_client import VeoClient
 from aivideomaker.media_pipeline.voice import VoiceSessionManager, NarrationAsset
 from aivideomaker.media_pipeline.elevenlabs_music_client import ElevenLabsMusicClient
+from aivideomaker.orchestrator_chart_models import ChartSpec
 from aivideomaker.stitcher.assembler import Stitcher, CaptionSegment
 from aivideomaker.captions.ass_builder import write_karaoke_ass
+from moviepy.editor import ImageClip
+
 
 _dotenv_path = find_dotenv(usecwd=True)
 if _dotenv_path:
@@ -250,6 +251,8 @@ class PipelineOrchestrator:
     music_client: ElevenLabsMusicClient | None
     stitcher: Stitcher
     style_template: Optional[StyleTemplate] = None
+    still_image_client: Optional[StillImageClient] = None
+    chart_renderer: Optional[ChartRenderer] = None
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineOrchestrator":
@@ -343,6 +346,14 @@ class PipelineOrchestrator:
             if style_template and style_template.style_bible
             else None
         )
+        still_client = StillImageClient(
+            asset_dir=placeholder_root / "stills",
+            api_key=os.getenv(config.veo_api_key_env),
+            use_vertex=config.veo_use_vertex,
+            project=config.veo_project,
+            location=config.veo_location,
+        )
+        chart_renderer = ChartRenderer(placeholder_root / "charts")
 
         return cls(
             config=config,
@@ -364,6 +375,8 @@ class PipelineOrchestrator:
             music_client=music_client,
             stitcher=Stitcher(export_dir=placeholder_root / "exports"),
             style_template=style_template,
+            still_image_client=still_client,
+            chart_renderer=chart_renderer,
         )
 
     @staticmethod
@@ -440,11 +453,59 @@ class PipelineOrchestrator:
                 ):
                     update["min_duration_sec"] = defaults.min_duration_sec
 
+            if beat.visual is None and update.get("visual") is None:
+                update["visual"] = BeatVisualSpec(type="cinematic_broll")
+
+            visual_type = None
+            current_visual = update.get("visual") or beat.visual
+            if current_visual:
+                visual_type = current_visual.type
+
+            if visual_type in (None, "", "cinematic_broll"):
+                inferred_type = self._classify_visual_mode(beat)
+                if inferred_type and inferred_type != "cinematic_broll":
+                    if current_visual:
+                        update["visual"] = current_visual.model_copy(update={"type": inferred_type})
+                    else:
+                        update["visual"] = BeatVisualSpec(type=inferred_type)
+
             if update:
                 beat = beat.model_copy(update=update)
             updated_beats.append(beat)
 
         return script.model_copy(update={"beats": updated_beats})
+
+    def _classify_visual_mode(self, beat: Beat) -> str:
+        llm = getattr(self.script_engine, "llm", None)
+        if llm is None:
+            return "cinematic_broll"
+
+        instructions = textwrap.dedent(
+            """
+            You are selecting a visual production approach for a short-form documentary beat.
+            Choose one of the following categories:
+              - "chart" when the narration focuses on numeric data, stats, or would benefit from a data visualization or on-screen text.
+              - "still_motion" when the narration references text/quotes, detailed wording, or visuals better served by a still image with light motion.
+              - "cinematic_broll" when the narration describes environments, people, or actions that should be depicted with motion footage.
+
+            Respond with a JSON object like {"visual_type": "chart"}.
+            """
+        ).strip()
+        payload = {
+            "transcript": beat.transcript,
+            "visual_seed": beat.visual_seed or "",
+            "purpose": beat.purpose,
+        }
+        prompt = f"{instructions}\nInput:{json.dumps(payload, ensure_ascii=False)}"
+        try:
+            raw = llm.complete(prompt)
+            data = load_json_with_repair(raw, logger=logger)
+            mode = str(data.get("visual_type", "cinematic_broll")).lower()
+            if mode in {"chart", "still_motion", "cinematic_broll"}:
+                return mode
+        except Exception as exc:  # pragma: no cover - LLM fallback
+            logger.debug("Visual classification fallback due to error: %s", exc)
+        return "cinematic_broll"
 
     def _build_initial_bundle(
         self,
@@ -674,37 +735,59 @@ class PipelineOrchestrator:
         run_dirs = self._prepare_run_environment(bundle.article.slug, output_dir, cleanup=False)
         prompt = next((p for p in bundle.prompts.media_prompts if p.chunk_id == clip_id), None)
         if not prompt:
-            raise ValueError(f"Prompt not found for clip '{clip_id}'")
+            logger.warning("Prompt missing for clip %s; constructing fallback prompt.", clip_id)
+            prompt = self._fallback_prompt(bundle, clip_id)
+
+        chunk_ref = next(
+            (c for c in bundle.chunks.chunks if getattr(c, "id", c.beat_id) == clip_id),
+            None,
+        )
+        beat_id = chunk_ref.beat_id if chunk_ref else clip_id
+        beat = next((b for b in bundle.script.beats if b.id == beat_id), None)
+        visual_mode = self._resolve_visual_mode(beat)
+
+        existing_clip = self._existing_clip_path(run_dirs, clip_id)
+        if existing_clip:
+            logger.info("♻️  Reusing existing clip for %s at %s", clip_id, existing_clip)
+            return ClipRenderResult(bundle=bundle, clip_id=clip_id, clip_asset=existing_clip)
+
+        clip_path: Optional[Path] = None
+
+        if visual_mode == "chart":
+            clip_path = self._render_chart_clip(bundle, beat, run_dirs, clip_id, prompt)
+        if clip_path is None and visual_mode in {"still_motion", "still"}:
+            clip_path = self._render_still_clip(prompt, run_dirs, clip_id)
 
         provider = self.config.media_provider.lower()
-        if provider == "sora":
-            real_sora = not dry_run
-            if real_sora and not getattr(self.media_client, "api_key", None):
-                raise RuntimeError(
-                    f"Missing Sora API key. Set {self.config.sora_api_key_env} in your environment."
-                )
-            submit_dry_run = not real_sora
-            logger.info("🎬  Rendering clip %s via Sora (dry_run=%s)", clip_id, submit_dry_run)
-            media_assets = self.media_client.submit_prompts([prompt], dry_run=submit_dry_run)
-        elif provider == "veo":
-            if dry_run:
-                logger.info("🧪  Dry run: skipping Veo submission for %s", clip_id)
-                media_assets = self.media_client.submit_prompts([prompt], dry_run=True)
-            else:
-                has_key = bool(getattr(self.media_client, "api_key", None))
-                uses_vertex = bool(getattr(self.media_client, "use_vertex", False))
-                if not has_key and not uses_vertex:
+        if clip_path is None:
+            if provider == "sora":
+                real_sora = not dry_run
+                if real_sora and not getattr(self.media_client, "api_key", None):
                     raise RuntimeError(
-                        f"Missing Veo API key. Set {self.config.veo_api_key_env} in your environment."
+                        f"Missing Sora API key. Set {self.config.sora_api_key_env} in your environment."
                     )
-                logger.info("🎬  Rendering clip %s via Veo model %s", clip_id, self.config.veo_model)
-                media_assets = self.media_client.submit_prompts([prompt], dry_run=False)
-        else:
-            raise ValueError(f"Unsupported media_provider '{self.config.media_provider}'")
+                submit_dry_run = not real_sora
+                logger.info("🎬  Rendering clip %s via Sora (dry_run=%s)", clip_id, submit_dry_run)
+                media_assets = self.media_client.submit_prompts([prompt], dry_run=submit_dry_run)
+            elif provider == "veo":
+                if dry_run:
+                    logger.info("🧪  Dry run: skipping Veo submission for %s", clip_id)
+                    media_assets = self.media_client.submit_prompts([prompt], dry_run=True)
+                else:
+                    has_key = bool(getattr(self.media_client, "api_key", None))
+                    uses_vertex = bool(getattr(self.media_client, "use_vertex", False))
+                    if not has_key and not uses_vertex:
+                        raise RuntimeError(
+                            f"Missing Veo API key. Set {self.config.veo_api_key_env} in your environment."
+                        )
+                    logger.info("🎬  Rendering clip %s via Veo model %s", clip_id, self.config.veo_model)
+                    media_assets = self.media_client.submit_prompts([prompt], dry_run=False)
+            else:
+                raise ValueError(f"Unsupported media_provider '{self.config.media_provider}'")
 
-        if not media_assets:
-            raise RuntimeError(f"Media client returned no assets for {clip_id}")
-        clip_path = Path(media_assets[0])
+            if not media_assets:
+                raise RuntimeError(f"Media client returned no assets for {clip_id}")
+            clip_path = Path(media_assets[0])
 
         try:
             stored_asset = clip_path.relative_to(run_dirs["run_dir"])
@@ -741,6 +824,87 @@ class PipelineOrchestrator:
             f"Suspenseful investigative score with gradual build, supporting a story about {article.article.metadata.title}. "
             f"Mood cues: {mood}."
         )
+
+    def _resolve_visual_mode(self, beat: Beat | None) -> str:
+        if not beat or not beat.visual or not beat.visual.type:
+            return "cinematic_broll"
+        return beat.visual.type.lower()
+
+    def _render_still_clip(
+        self,
+        prompt: MediaPrompt,
+        run_dirs: dict[str, Path],
+        clip_id: str,
+    ) -> Path:
+        if not self.still_image_client:
+            raise RuntimeError("Still image client is not configured")
+        image_path = self.still_image_client.generate(prompt.visual_prompt, prompt.negative_prompt, clip_id)
+        if not Path(image_path).is_absolute():
+            image_path = run_dirs["stills_dir"] / Path(image_path)
+        duration = max(float(prompt.duration_sec or 3.0), 1.5)
+        return self._image_to_video(Path(image_path), run_dirs["sora_dir"], clip_id, duration)
+
+    def _render_chart_clip(
+        self,
+        bundle: PipelineBundle,
+        beat: Beat | None,
+        run_dirs: dict[str, Path],
+        clip_id: str,
+        prompt: MediaPrompt,
+    ) -> Optional[Path]:
+        if not self.chart_renderer or not beat or not beat.visual or not beat.visual.spec_id:
+            return None
+        spec = bundle.chart_specs.get(beat.visual.spec_id)
+        if not spec:
+            logger.warning("No chart spec '%s' found; falling back to still generation", beat.visual.spec_id)
+            return None
+        image_path = self.chart_renderer.render(spec, clip_id)
+        duration = max(float(prompt.duration_sec or 3.0), 2.0)
+        return self._image_to_video(Path(image_path), run_dirs["sora_dir"], clip_id, duration)
+
+    def _image_to_video(
+        self,
+        image_path: Path,
+        target_dir: Path,
+        clip_id: str,
+        duration: float,
+    ) -> Path:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        output = target_dir / f"{clip_id}.mp4"
+        clip = ImageClip(str(image_path))
+        clip = clip.set_duration(duration).resize(height=1920)
+        if clip.w > 1080:
+            clip = clip.crop(x_center=clip.w / 2, width=1080)
+        elif clip.w < 1080:
+            clip = clip.resize(width=1080)
+        zoom_factor = 0.05
+        clip = clip.resize(lambda t: 1 + zoom_factor * (t / max(duration, 1.0)))
+        clip = clip.set_fps(30)
+        clip.write_videofile(str(output), codec="libx264", audio=False, bitrate="4000k", logger=None)
+        clip.close()
+        return output
+
+    def _fallback_prompt(self, bundle: PipelineBundle, clip_id: str) -> MediaPrompt:
+        chunk = next((c for c in bundle.chunks.chunks if getattr(c, "id", c.beat_id) == clip_id), None)
+        beat = next((b for b in bundle.script.beats if b.id == (chunk.beat_id if chunk else clip_id)), None)
+        visual_prompt = "Documentary still shot." if not beat else beat.transcript
+        return MediaPrompt(
+            chunk_id=clip_id,
+            transcript=chunk.transcript if chunk else (beat.transcript if beat else ""),
+            visual_prompt=visual_prompt,
+            audio_prompt="Ambient bed, allow narration space",
+            duration_sec=chunk.estimated_duration_sec if chunk else 3.0,
+        )
+
+    def _existing_clip_path(self, run_dirs: dict[str, Path], clip_id: str) -> Path | None:
+        candidates = [
+            run_dirs["sora_dir"] / f"{clip_id}.mp4",
+            run_dirs["veo_dir"] / f"{clip_id}.mp4",
+        ]
+        for path in candidates:
+            if path.exists():
+                return path
+        return None
 
     def _format_review_failure(self, decision: ScriptReviewDecision) -> str:
         lines = [
@@ -839,11 +1003,13 @@ class PipelineOrchestrator:
         media_dir = run_dir / "media"
         sora_dir = media_dir / "sora_clips"
         veo_dir = media_dir / "veo_clips"
+        stills_dir = media_dir / "stills"
+        charts_dir = media_dir / "charts"
         voice_dir = media_dir / "voice"
         music_dir = media_dir / "music"
         export_dir = run_dir / "exports"
 
-        for path in (sora_dir, veo_dir, voice_dir, music_dir, export_dir):
+        for path in (sora_dir, veo_dir, stills_dir, charts_dir, voice_dir, music_dir, export_dir):
             path.mkdir(parents=True, exist_ok=True)
 
         # Update client destinations to new per-run directories
@@ -851,6 +1017,11 @@ class PipelineOrchestrator:
             self.media_client.asset_dir = sora_dir
         elif isinstance(self.media_client, VeoClient):
             self.media_client.asset_dir = veo_dir
+        if self.still_image_client:
+            self.still_image_client.asset_dir = stills_dir
+        if self.chart_renderer:
+            self.chart_renderer.output_dir = charts_dir
+            self.chart_renderer.output_dir.mkdir(parents=True, exist_ok=True)
         if self.voice_manager:
             self.voice_manager.base_dir = voice_dir
         if self.music_client:
@@ -863,9 +1034,12 @@ class PipelineOrchestrator:
             "scripts_dir": scripts_dir,
             "sora_dir": sora_dir,
             "veo_dir": veo_dir,
+            "stills_dir": stills_dir,
+            "charts_dir": charts_dir,
             "voice_dir": voice_dir,
             "music_dir": music_dir,
             "export_dir": export_dir,
+            "media_dir": media_dir,
         }
 
     def _write_social_caption(
