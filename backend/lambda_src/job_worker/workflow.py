@@ -128,13 +128,18 @@ class PipelineWorkflow:
             if not absolute_final_video.exists():
                 absolute_final_video = None
 
-        drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
-        final_video_key = self._copy_exports_to_final(
-            context.job_id,
-            run_dir,
-            absolute_final_video,
-            drive_folder,
-        )
+        should_upload_final = self._should_upload_final_artifacts(context.pipeline_config)
+        final_video_key: Optional[str] = None
+        if should_upload_final:
+            drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
+            final_video_key = self._copy_exports_to_final(
+                context.job_id,
+                run_dir,
+                absolute_final_video,
+                drive_folder,
+            )
+        else:
+            logger.info("Skipping final artifact export for job %s", context.job_id)
 
         attributes = {
             "output_bucket": self._settings.output_bucket,
@@ -142,6 +147,8 @@ class PipelineWorkflow:
         }
         if final_video_key:
             attributes["final_video_key"] = final_video_key
+        elif not should_upload_final:
+            attributes["final_exports_skipped"] = True
 
         self._repository.update_status(context.job_id, JobStatusUpdate(status="COMPLETED", attributes=attributes))
         logger.info("Job %s completed", context.job_id)
@@ -265,3 +272,43 @@ class PipelineWorkflow:
                 if isinstance(drive_folder, str) and drive_folder.strip():
                     return drive_folder.strip()
         return None
+
+    def _should_upload_final_artifacts(self, pipeline_config: Optional[Mapping[str, Any]]) -> bool:
+        if not pipeline_config or not isinstance(pipeline_config, Mapping):
+            return True
+
+        overrides = dict(pipeline_config)
+
+        if "deliver_final_exports" in overrides:
+            return self._coerce_bool(overrides["deliver_final_exports"], default=True)
+
+        if "deliverFinalExports" in overrides:
+            return self._coerce_bool(overrides["deliverFinalExports"], default=True)
+
+        if "disable_final_exports" in overrides:
+            return not self._coerce_bool(overrides["disable_final_exports"], default=False)
+
+        if "disableFinalExports" in overrides:
+            return not self._coerce_bool(overrides["disableFinalExports"], default=False)
+
+        if "skip_drive_upload" in overrides:
+            return not self._coerce_bool(overrides["skip_drive_upload"], default=False)
+
+        if "skipDriveUpload" in overrides:
+            return not self._coerce_bool(overrides["skipDriveUpload"], default=False)
+
+        return True
+
+    @staticmethod
+    def _coerce_bool(value: Any, *, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "off"}:
+                return False
+        return default
