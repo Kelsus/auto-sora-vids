@@ -34,13 +34,13 @@ Next steps
 # Video Quality Upgrade Plan (from NextStepsConvo)
 
 ## 1. Establish creative guardrails
-- [ ] Draft style bible (`style_bible`) capturing visual palette, motion rules, camera/lens guidance, audio loudness targets, and caption styles.
-- [ ] Extend bundle schema with `style_bible`, `beats_meta_defaults`, `chart_specs`, and `qc_ruleset` blocks as outlined in NextStepsConvo.
-- [ ] Add per-beat metadata (`intent`, `visual.type`, negations, QC allowances, caption routing) to existing bundle generator.
+- [x] Draft style bible (`style_bible`) capturing visual palette, motion rules, camera/lens guidance, audio loudness targets, and caption styles.
+- [x] Extend bundle schema with `style_bible`, `beats_meta_defaults`, `chart_specs`, and `qc_ruleset` blocks as outlined in NextStepsConvo.
+- [x] Add per-beat metadata (`intent`, `visual.type`, negations, QC allowances, caption routing) to existing bundle generator.
 
 ## 2. Strengthen prompt + asset planning
 - [ ] Create reusable Sora prompt presets (8–10) aligned with style bible and embed default negations (no text/graphs/split-screen).
-- [ ] Implement beat-to-prompt mapping that selects presets based on `visual.type` and enforces min duration targets from `beats_meta_defaults`.
+- [x] Implement beat-to-prompt mapping that selects presets based on `visual.type` and enforces min duration targets from `beats_meta_defaults`.
 - [ ] Introduce prompt linting to ensure every request carries negative constraints and camera grammar.
 
 ## 3. Add alternative visual tracks
