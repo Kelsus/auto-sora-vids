@@ -144,6 +144,7 @@ class PipelineWorkflow:
         attributes = {
             "output_bucket": self._settings.output_bucket,
             "output_prefix": context.output_prefix,
+            "error_message": None,
         }
         if final_video_key:
             attributes["final_video_key"] = final_video_key

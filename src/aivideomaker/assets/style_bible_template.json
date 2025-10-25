@@ -1,0 +1,180 @@
+{
+  "style_bible": {
+    "visual": {
+      "palette": "neutral-realism",
+      "grain": true,
+      "lens": "35-50mm equivalent",
+      "motion": [
+        "slow push-in 8%",
+        "tripod-steady",
+        "no jump cuts"
+      ],
+      "bans": [
+        "split_screen",
+        "on_screen_text",
+        "fake_numbers",
+        "synthetic_UI",
+        "charts_in_sora"
+      ]
+    },
+    "audio": {
+      "vo_lufs": -14.0,
+      "true_peak_db": -1.0,
+      "music_sidechain_db": -8.0,
+      "sfx_usage_max": 3
+    },
+    "captions": {
+      "default": {
+        "outline": true,
+        "shadow": true,
+        "max_lines": 2,
+        "max_chars_per_line": 34
+      },
+      "data": {
+        "outline": true,
+        "shadow": true,
+        "max_lines": 2,
+        "max_chars_per_line": 34,
+        "position": "top_safe",
+        "weight": "regular"
+      }
+    }
+  },
+  "beats_meta_defaults": {
+    "min_duration_sec": 2.5,
+    "max_cuts_in_row_lt_1p7s": 2,
+    "caption_region": "bottom_safe"
+  },
+  "chart_specs": {
+    "sample_donut": {
+      "library": "vega-lite",
+      "width": 1080,
+      "height": 1920,
+      "data": {
+        "values": [
+          {
+            "label": "Primary metric",
+            "value": 60
+          },
+          {
+            "label": "Secondary metric",
+            "value": 40
+          }
+        ],
+        "note": "Replace values/labels with article-specific data"
+      },
+      "mark": "arc",
+      "encoding": {
+        "theta": {
+          "field": "value",
+          "type": "quantitative"
+        },
+        "color": {
+          "field": "label",
+          "type": "nominal"
+        }
+      },
+      "style": "brandCharts/default"
+    }
+  },
+  "qc_ruleset": {
+    "min_shot_sec": 1.25,
+    "prefer_shot_sec": [
+      2.5,
+      3.5
+    ],
+    "flag_if_text_when_forbidden": true,
+    "flag_split_screen": true,
+    "flag_flicker_threshold": 0.12,
+    "style_refset_id": "film_refset_v1",
+    "reject_if_clip_similarity_below": 0.24
+  },
+  "beat_overrides": {
+    "hook": {
+      "intent": "tension",
+      "visual": {
+        "type": "cinematic_broll",
+        "negations": [
+          "split_screen",
+          "text",
+          "charts"
+        ]
+      },
+      "qc": {
+        "allow_text": false,
+        "allow_numbers": false
+      }
+    },
+    "scope": {
+      "intent": "scale",
+      "visual": {
+        "type": "cinematic_broll",
+        "negations": [
+          "split_screen",
+          "text",
+          "charts"
+        ]
+      },
+      "qc": {
+        "allow_text": false,
+        "allow_numbers": false
+      }
+    },
+    "stakes": {
+      "intent": "authority",
+      "visual": {
+        "type": "still_motion",
+        "negations": [
+          "charts_in_sora",
+          "split_screen"
+        ]
+      },
+      "qc": {
+        "allow_text": false,
+        "allow_numbers": true,
+        "numbers_source": "sources[0]"
+      }
+    },
+    "contradiction": {
+      "intent": "intrigue",
+      "visual": {
+        "type": "still_motion",
+        "negations": [
+          "charts_in_sora",
+          "split_screen"
+        ]
+      },
+      "qc": {
+        "allow_text": false,
+        "allow_numbers": false
+      }
+    },
+    "complexity": {
+      "intent": "dilemma",
+      "visual": {
+        "type": "still_motion",
+        "negations": [
+          "charts_in_sora",
+          "split_screen"
+        ]
+      },
+      "qc": {
+        "allow_text": false,
+        "allow_numbers": false
+      }
+    },
+    "reveal": {
+      "intent": "resolution",
+      "visual": {
+        "type": "chart",
+        "spec_id": "sample_donut"
+      },
+      "qc": {
+        "allow_text": true,
+        "allow_numbers": true,
+        "numbers_source": "sources[0]"
+      },
+      "caption_region": "top_safe"
+    }
+  }
+}

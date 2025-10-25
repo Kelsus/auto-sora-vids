@@ -7,8 +7,9 @@ import shutil
 import sys
 import textwrap
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field
@@ -21,7 +22,12 @@ from aivideomaker.prompt_builder.builder import MediaPromptBuilder
 from aivideomaker.prompt_builder.model import MediaPromptBundle
 from aivideomaker.script_engine.engine import ScriptEngine
 from aivideomaker.script_engine.llm import ClaudeLLM, EchoLLM, LLMClient
-from aivideomaker.script_engine.model import ScriptPlan, SocialCaption
+from aivideomaker.script_engine.model import (
+    BeatQCRules,
+    BeatVisualSpec,
+    ScriptPlan,
+    SocialCaption,
+)
 from aivideomaker.script_engine.reviewer import ScriptReviewDecision, ScriptReviewer
 from aivideomaker.media_pipeline.elevenlabs_client import ElevenLabsClient
 from aivideomaker.media_pipeline.sora_client import SoraClient
@@ -40,6 +46,83 @@ logger = logging.getLogger(__name__)
 
 class ScriptRejectedError(RuntimeError):
     """Raised when a script is rejected and the pipeline should halt gracefully."""
+
+
+class VisualStyle(BaseModel):
+    palette: str
+    grain: bool = False
+    lens: Optional[str] = None
+    motion: list[str] = Field(default_factory=list)
+    bans: list[str] = Field(default_factory=list)
+
+
+class AudioStyle(BaseModel):
+    vo_lufs: float
+    true_peak_db: float
+    music_sidechain_db: float
+    sfx_usage_max: int
+
+
+class CaptionStyleSpec(BaseModel):
+    outline: bool = True
+    shadow: bool = True
+    max_lines: int = 2
+    max_chars_per_line: int = 34
+    position: Optional[str] = None
+    weight: Optional[str] = None
+
+
+class CaptionStyles(BaseModel):
+    default: CaptionStyleSpec
+    data: Optional[CaptionStyleSpec] = None
+
+
+class StyleBible(BaseModel):
+    visual: VisualStyle
+    audio: AudioStyle
+    captions: CaptionStyles
+
+
+class BeatsMetaDefaults(BaseModel):
+    min_duration_sec: float
+    max_cuts_in_row_lt_1p7s: int
+    caption_region: str
+
+
+class ChartSpec(BaseModel):
+    library: str
+    width: int
+    height: int
+    data: dict[str, Any]
+    mark: str
+    encoding: dict[str, Any]
+    style: Optional[str] = None
+
+
+class QualityControlRuleSet(BaseModel):
+    min_shot_sec: float
+    prefer_shot_sec: list[float] = Field(default_factory=list)
+    flag_if_text_when_forbidden: bool = True
+    flag_split_screen: bool = True
+    flag_flicker_threshold: float = 0.12
+    style_refset_id: Optional[str] = None
+    reject_if_clip_similarity_below: Optional[float] = None
+
+
+class BeatOverride(BaseModel):
+    intent: Optional[str] = None
+    visual: Optional[BeatVisualSpec] = None
+    qc: Optional[BeatQCRules] = None
+    caption_region: Optional[str] = None
+    min_duration_sec: Optional[float] = None
+
+
+class StyleTemplate(BaseModel):
+    style_bible: StyleBible
+    beats_meta_defaults: Optional[BeatsMetaDefaults] = None
+    chart_specs: dict[str, ChartSpec] = Field(default_factory=dict)
+    qc_ruleset: Optional[QualityControlRuleSet] = None
+    beat_overrides: dict[str, BeatOverride] = Field(default_factory=dict)
 
 
 class PipelineConfig(BaseModel):
@@ -89,6 +172,7 @@ class PipelineConfig(BaseModel):
     veo_location: str = "us-central1"
     veo_credentials_path: Optional[Path] = None
     veo_credentials_parameter: Optional[str] = None
+    style_template_path: Optional[Path] = None
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineConfig":
@@ -136,6 +220,10 @@ class PipelineBundle(BaseModel):
     final_video: Optional[Path]
     script_greenlit: bool = True
     human_approval: Optional[bool] = None
+    style_bible: Optional[StyleBible] = None
+    beats_meta_defaults: Optional[BeatsMetaDefaults] = None
+    chart_specs: dict[str, ChartSpec] = Field(default_factory=dict)
+    qc_ruleset: Optional[QualityControlRuleSet] = None
 
 
 class PromptGenerationResult(BaseModel):
@@ -161,6 +249,7 @@ class PipelineOrchestrator:
     voice_manager: VoiceSessionManager
     music_client: ElevenLabsMusicClient | None
     stitcher: Stitcher
+    style_template: Optional[StyleTemplate] = None
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineOrchestrator":
@@ -248,6 +337,12 @@ class PipelineOrchestrator:
                 )
 
         llm_client = config.build_llm()
+        style_template = cls._load_style_template(config)
+        visual_style_dict = (
+            style_template.style_bible.visual.model_dump()
+            if style_template and style_template.style_bible
+            else None
+        )
 
         return cls(
             config=config,
@@ -258,6 +353,7 @@ class PipelineOrchestrator:
             prompt_builder=MediaPromptBuilder(
                 default_voice=config.voice_id,
                 negative_prompt=config.negative_prompt,
+                visual_style=visual_style_dict,
             ),
             media_client=media_client,
             voice_manager=VoiceSessionManager(
@@ -267,7 +363,88 @@ class PipelineOrchestrator:
             ),
             music_client=music_client,
             stitcher=Stitcher(export_dir=placeholder_root / "exports"),
+            style_template=style_template,
         )
+
+    @staticmethod
+    def _load_style_template(config: PipelineConfig) -> Optional[StyleTemplate]:
+        candidate_paths: list[Path] = []
+        if config.style_template_path:
+            path = config.style_template_path
+            if not path.is_absolute():
+                path = Path.cwd() / path
+            candidate_paths.append(path)
+
+        for candidate in candidate_paths:
+            if candidate.exists():
+                try:
+                    payload = json.loads(candidate.read_text(encoding="utf-8"))
+                    return StyleTemplate.model_validate(payload)
+                except Exception as exc:  # pragma: no cover - configuration error
+                    logger.error("💥  Failed to load style template from %s: %s", candidate, exc)
+
+        try:
+            template_path = resources.files("aivideomaker.assets").joinpath("style_bible_template.json")
+        except (AttributeError, ModuleNotFoundError):  # pragma: no cover - python <3.9 or packaging issue
+            logger.warning("⚠️  Style template resources unavailable; continuing without style metadata.")
+            return None
+
+        if not template_path.is_file():
+            logger.info("ℹ️  No bundled style template found; continuing without style metadata.")
+            return None
+
+        try:
+            with template_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            return StyleTemplate.model_validate(payload)
+        except Exception as exc:  # pragma: no cover - should not happen
+            logger.error("💥  Failed to parse packaged style template: %s", exc)
+            return None
+
+    def _apply_style_template(self, script: ScriptPlan) -> ScriptPlan:
+        template = self.style_template
+        if not template:
+            return script
+
+        overrides = template.beat_overrides
+        defaults = template.beats_meta_defaults
+        updated_beats = []
+
+        for beat in script.beats:
+            update: dict[str, Any] = {}
+            override = overrides.get(beat.id) if overrides else None
+
+            if override:
+                if override.intent is not None:
+                    update["intent"] = override.intent
+                if override.visual is not None:
+                    update["visual"] = override.visual
+                if override.qc is not None:
+                    update["qc"] = override.qc
+                if override.caption_region is not None:
+                    update["caption_region"] = override.caption_region
+                if override.min_duration_sec is not None:
+                    update["min_duration_sec"] = override.min_duration_sec
+
+            if defaults:
+                if (
+                    defaults.caption_region
+                    and "caption_region" not in update
+                    and beat.caption_region is None
+                ):
+                    update["caption_region"] = defaults.caption_region
+                if (
+                    defaults.min_duration_sec is not None
+                    and "min_duration_sec" not in update
+                    and beat.min_duration_sec is None
+                ):
+                    update["min_duration_sec"] = defaults.min_duration_sec
+
+            if update:
+                beat = beat.model_copy(update=update)
+            updated_beats.append(beat)
+
+        return script.model_copy(update={"beats": updated_beats})
 
     def _build_initial_bundle(
         self,
@@ -332,6 +509,9 @@ class PipelineOrchestrator:
                 logger.info("🚦  Prompts-only mode active; skipping human approval gate.")
                 human_approval = None
             previous_script_attempt = script
+
+            if self.style_template:
+                script = self._apply_style_template(script)
             break
 
         narration_asset: NarrationAsset | None = None
@@ -379,6 +559,27 @@ class PipelineOrchestrator:
         logger.info("🛠️  Building structured prompts")
         prompts = self.prompt_builder.build(article, script, chunks)
 
+        style_bible = (
+            self.style_template.style_bible.model_copy()
+            if self.style_template and self.style_template.style_bible
+            else None
+        )
+        beats_meta_defaults = (
+            self.style_template.beats_meta_defaults.model_copy()
+            if self.style_template and self.style_template.beats_meta_defaults
+            else None
+        )
+        chart_specs = (
+            {key: spec.model_copy() for key, spec in self.style_template.chart_specs.items()}
+            if self.style_template and self.style_template.chart_specs
+            else {}
+        )
+        qc_ruleset = (
+            self.style_template.qc_ruleset.model_copy()
+            if self.style_template and self.style_template.qc_ruleset
+            else None
+        )
+
         return PipelineBundle(
             article=article,
             script=script,
@@ -395,6 +596,10 @@ class PipelineOrchestrator:
             final_video=None,
             script_greenlit=script_greenlit,
             human_approval=human_approval,
+            style_bible=style_bible,
+            beats_meta_defaults=beats_meta_defaults,
+            chart_specs=chart_specs,
+            qc_ruleset=qc_ruleset,
         )
 
     def run(
