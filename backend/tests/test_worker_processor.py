@@ -13,6 +13,7 @@ sys.path.insert(0, str(root_dir / "backend" / "lambda_src" / "common_layer" / "p
 from job_worker.config import WorkerSettings
 from job_worker.models import ClipTask, JobContext, JobMetadata, JobStatusUpdate
 from job_worker.workflow import PipelineWorkflow
+from job_worker import handler as worker_handler
 
 
 class FakeBundle:
@@ -140,12 +141,27 @@ class RecordingRepository:
     def __init__(self) -> None:
         self.updates: list[tuple[str, JobStatusUpdate]] = []
         self.records: dict[str, dict] = {}
+        self.transitions: list[tuple[str, str | None]] = []
 
     def update_status(self, job_id: str, update: JobStatusUpdate) -> None:
         self.updates.append((job_id, update))
+        record = self.records.setdefault(job_id, {})
+        record["status"] = update.status
+        record.update(update.attributes)
+        self.records[job_id] = record
 
     def fetch(self, job_id: str):
         return self.records.get(job_id)
+
+    def transition_to_running(self, job_id: str) -> bool:
+        record = self.records.get(job_id, {})
+        current_status = record.get("status")
+        self.transitions.append((job_id, current_status))
+        if current_status == "QUEUED":
+            record["status"] = "RUNNING"
+            self.records[job_id] = record
+            return True
+        return False
 
 
 def build_settings(tmp_path: Path) -> WorkerSettings:
@@ -315,3 +331,131 @@ def test_mark_failed_records_status(tmp_path):
 
     assert repo.updates[-1][1].status == "FAILED"
     assert "error_message" in repo.updates[-1][1].attributes
+
+
+def test_mark_failed_handler_updates_original_job(tmp_path, monkeypatch):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    original_job_id = "https-www-supplychaindive-com-news-old-dominion-freight-line-gri-nearly-5-percen"
+    repo.records[original_job_id] = {"status": "RUNNING"}
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    monkeypatch.setattr(worker_handler, "PipelineWorkflow", lambda: workflow)
+
+    event = {
+        "job": {
+            "jobId": original_job_id,
+            "articleUrl": "https://www.supplychaindive.com/news/old-dominion-freight-line-gri-nearly-5-percent-nov-2025/803427/",
+            "scheduledDatetime": "2025-10-27T13:15:35.343344+00:00",
+            "metadata": {
+                "pipeline_config": {
+                    "drive_folder": "Korsair",
+                },
+            },
+            "jobType": "IMMEDIATE",
+        },
+        "jobContext": {
+            "jobId": original_job_id,
+            "articleUrl": "https://www.supplychaindive.com/news/old-dominion-freight-line-gri-nearly-5-percent-nov-2025/803427/",
+            "bundleKey": f"jobs/{original_job_id}/bundle.json",
+            "outputPrefix": f"jobs/{original_job_id}/run",
+            "clipIds": [
+                "hook-1",
+                "hook-2",
+                "hook-3",
+                "hook-4",
+                "hook-5",
+                "hook-6",
+                "escalation-1",
+                "escalation-2",
+                "escalation-3",
+                "escalation-4",
+                "deepen-1",
+                "deepen-2",
+                "deepen-3",
+                "deepen-4",
+                "pivot-1",
+                "pivot-2",
+                "pivot-3",
+                "pivot-4",
+                "pivot-5",
+                "diagnosis-1",
+                "diagnosis-2",
+                "diagnosis-3",
+                "diagnosis-4",
+                "resolution-1",
+                "resolution-2",
+                "resolution-3",
+                "resolution-4",
+            ],
+            "dryRun": False,
+            "pipelineConfig": {
+                "drive_folder": "Korsair",
+            },
+        },
+        "error": {
+            "Error": "HTTPError",
+            "Cause": (
+                "{\"errorMessage\": \"503 Server Error: Service Unavailable for url: "
+                "https://api.openai.com/v1/videos/video_68ff7134f6f48198abea4904d00048410c673ff7de2887ff/content?variant=video\", "
+                "\"errorType\": \"HTTPError\", \"requestId\": \"22b9b74d-9a18-4335-9a0d-5aae3a15653e\", \"stackTrace\": ["
+                "\"  File \\\"/var/task/job_worker/handler.py\\\", line 23, in handler\\n"
+                "    result = workflow.render_clip(ClipTask(job_context=job_context, clip_id=clip_id))\\n\", "
+                "\"  File \\\"/var/task/job_worker/workflow.py\\\", line 95, in render_clip\\n"
+                "    clip_result = runner.render_clip(bundle, task.clip_id, context.dry_run)\\n\", "
+                "\"  File \\\"/var/task/job_worker/pipeline_runner.py\\\", line 55, in render_clip\\n"
+                "    result = orchestrator.render_clip(\\n\", "
+                "\"  File \\\"/var/task/src/aivideomaker/orchestrator.py\\\", line 484, in render_clip\\n"
+                "    media_assets = self.media_client.submit_prompts([prompt], dry_run=submit_dry_run)\\n\", "
+                "\"  File \\\"/var/task/src/aivideomaker/media_pipeline/sora_client.py\\\", line 171, in submit_prompts\\n"
+                "    self._download_video(job_id, target)\\n\", "
+                "\"  File \\\"/var/task/src/aivideomaker/media_pipeline/sora_client.py\\\", line 328, in _download_video\\n"
+                "    response.raise_for_status()\\n\", "
+                "\"  File \\\"/var/lang/lib/python3.11/site-packages/requests/models.py\\\", line 1026, in raise_for_status\\n"
+                "    raise HTTPError(http_error_msg, response=self)\\n\"]}"
+            ),
+        },
+        "action": "MARK_FAILED",
+    }
+
+    worker_handler.handler(event, None)
+
+    assert repo.records[original_job_id]["status"] == "FAILED"
+    assert repo.records[original_job_id]["error_message"].startswith("{")
+
+
+def test_mark_running_transitions_when_expected(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    repo.records["story"] = {"status": "QUEUED"}
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    metadata = JobMetadata(job_id="story", article_url="https://example.com/story")
+    raw_payload = {"jobId": metadata.job_id, "articleUrl": metadata.article_url}
+    result = workflow.mark_running(metadata, raw_payload)
+
+    assert repo.records["story"]["status"] == "RUNNING"
+    assert repo.transitions[-1] == ("story", "QUEUED")
+    assert result == {"job": raw_payload}
+
+
+def test_mark_running_updates_when_transition_fails(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    repo.records["story"] = {"status": "RUNNING"}
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    metadata = JobMetadata(job_id="story", article_url="https://example.com/story")
+    raw_payload = {"jobId": metadata.job_id, "articleUrl": metadata.article_url}
+    workflow.mark_running(metadata, raw_payload)
+
+    assert repo.updates[-1][1].status == "RUNNING"

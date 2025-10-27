@@ -49,10 +49,10 @@ class PipelineWorkflow:
         runner = self._get_runner(metadata.pipeline_config)
         prompts_result = runner.run_prompts(metadata.article_url, dry_run=dry_run_value)
         bundle = prompts_result.bundle
+        bundle_slug = bundle.article.slug
         job_id = metadata.job_id
-        if job_id != bundle.article.slug:
-            logger.warning("Job id %s differs from bundle slug %s; using bundle slug", job_id, bundle.article.slug)
-            job_id = bundle.article.slug
+        if job_id != bundle_slug:
+            logger.warning("Job id %s differs from bundle slug %s; keeping original id", job_id, bundle_slug)
 
         run_dir = self._local_run_dir(job_id)
         bundle_key = self._settings.bundle_key(job_id)
@@ -236,6 +236,13 @@ class PipelineWorkflow:
             "captionsAssPath": str(relative_captions),
             "captionsFinalKey": final_captions_key,
         }
+
+    def mark_running(self, metadata: JobMetadata, raw_payload: Dict[str, Any]) -> Dict[str, Any]:
+        transitioned = self._repository.transition_to_running(metadata.job_id)
+        if not transitioned:
+            self._repository.update_status(metadata.job_id, JobStatusUpdate(status="RUNNING", attributes={}))
+        logger.info("Job %s marked as RUNNING", metadata.job_id)
+        return {"job": raw_payload}
 
     def mark_failed(self, context: JobContext, error: Dict[str, Any] | None = None) -> None:
         message = "Unknown error"

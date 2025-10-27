@@ -353,11 +353,20 @@ class VideoAutomationStack(Stack):
         fail_state = sfn.Fail(self, "JobFailed")
         failure_chain = sfn.Chain.start(failure_handler).next(fail_state)
 
-        initialize_state = sfn.Pass(
+        initialize_state = tasks.LambdaInvoke(
             self,
             "InitializeState",
-            parameters={"job.$": "$"},
+            lambda_function=worker_lambda,
+            payload=sfn.TaskInput.from_object(
+                {
+                    "action": "MARK_RUNNING",
+                    "job.$": "$",
+                }
+            ),
+            result_path="$",
+            payload_response_only=True,
         )
+        initialize_state.add_catch(failure_chain, result_path="$.error")
 
         generate_prompts_task = tasks.LambdaInvoke(
             self,
@@ -437,9 +446,7 @@ class VideoAutomationStack(Stack):
         )
         generate_captions_task.add_catch(failure_chain, result_path="$.error")
 
-        workflow_definition = (
-            initialize_state.next(generate_prompts_task).next(render_clips_map).next(stitch_task).next(generate_captions_task)
-        )
+        workflow_definition = initialize_state.next(generate_prompts_task).next(render_clips_map).next(stitch_task).next(generate_captions_task)
         state_machine = sfn.StateMachine(
             self,
             "VideoJobStateMachine",
