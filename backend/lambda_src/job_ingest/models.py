@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping
 
-from aivideomaker.article_ingest.model import slugify
+from aivideomaker.article_ingest.model import slug_from_url
 from common.time_utils import ensure_utc, utc_now
 
 
@@ -85,4 +85,4 @@ class JobRequest:
 
     @property
     def job_id(self) -> str:
-        return slugify(self.url)
+        return slug_from_url(self.url)
