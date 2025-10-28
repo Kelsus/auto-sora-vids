@@ -515,13 +515,15 @@ class VideoAutomationStack(Stack):
                 command=[
                     "bash",
                     "-c",
-                    "mkdir -p /asset-output && cp -r /asset-input/. /asset-output && pip install --no-cache-dir -r gdrive_forwarder/requirements.txt --target /asset-output --implementation cp --platform manylinux2014_x86_64 --python-version 3.11 --abi cp311 --only-binary=:all: && cp -r /project-src/aivideomaker /asset-output/aivideomaker",
-                ],
-                volumes=[
-                    DockerVolume(
-                        host_path=str(project_root / "src"),
-                        container_path="/project-src",
-                    )
+                    "mkdir -p /asset-output && "
+                    "cp -r /asset-input/. /asset-output && "
+                    "pip install --no-cache-dir -r gdrive_forwarder/requirements.txt "
+                    "--target /asset-output "
+                    "--implementation cp "
+                    "--platform manylinux2014_x86_64 "
+                    "--python-version 3.11 "
+                    "--abi cp311 "
+                    "--only-binary=:all:",
                 ],
             ),
         )
