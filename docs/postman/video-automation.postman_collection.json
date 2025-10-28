@@ -1,0 +1,75 @@
+{
+  "info": {
+    "_postman_id": "a4dbd267-4d0b-4f84-9a1d-78d093e7e0dd",
+    "name": "Video Automation API",
+    "description": "Collection to exercise the serverless video automation endpoints deployed via `VideoAutomationStack`.\n\nEnvironment variable `api_base_url` should point at the API Gateway stage endpoint (e.g. `https://uxc155vpv4.execute-api.us-east-1.amazonaws.com/prod`).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Submit Video Job",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"url\": \"https://example.com/news/investigative-piece\",\n  \"scheduled_datetime\": \"2025-10-17T21:30:00Z\",\n  \"metadata\": {\n    \"notes\": \"Submitted from Postman\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{api_base_url}}/jobs",
+          "host": [
+            "{{api_base_url}}"
+          ],
+          "path": [
+            "jobs"
+          ]
+        },
+        "description": "Creates (or upserts) a video automation job. The job ID is derived from the article URL slug."
+      },
+      "response": []
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": []
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test(\"HTTP 201 Created\", function () {",
+          "    pm.response.to.have.status(201);",
+          "});",
+          "",
+          "pm.test(\"Response contains jobId\", function () {",
+          "    var jsonData = pm.response.json();",
+          "    pm.expect(jsonData).to.have.property('jobId');",
+          "    pm.expect(jsonData.jobId).to.be.a('string').and.not.empty;",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "api_base_url",
+      "value": "https://uxc155vpv4.execute-api.us-east-1.amazonaws.com/prod",
+      "type": "string"
+    }
+  ]
+}

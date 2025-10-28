@@ -3,3 +3,9 @@
 *.egg-info/
 data/
 __pycache__/
+cdk.out/
+build/
+google-api-key.json
+.clasp.json
+appsscript.json
+videos/

@@ -3,12 +3,34 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
+from urllib.parse import urlparse
+
 from pydantic import BaseModel, HttpUrl, ValidationInfo, field_validator
 
 
 def slugify(text: str) -> str:
     cleaned = "".join(ch.lower() if ch.isalnum() else "-" for ch in text)
     return "-".join(filter(None, cleaned.split("-")))[:80]
+
+
+def slug_from_url(raw_url: str) -> str:
+    parsed = urlparse(raw_url)
+    domain_slug = slugify(parsed.netloc or raw_url)
+    path_segments = [segment for segment in (parsed.path or "").split("/") if segment]
+    path_slug = slugify(path_segments[-1]) if path_segments else ""
+
+    parts = []
+    if domain_slug:
+        parts.append(domain_slug)
+    if path_slug and path_slug != domain_slug:
+        parts.append(path_slug)
+
+    if not parts:
+        return slugify(raw_url)
+
+    combined = "-".join(parts)
+    trimmed = combined[:80].strip("-")
+    return trimmed or slugify(raw_url)
 
 
 class ArticleMetadata(BaseModel):
@@ -30,7 +52,7 @@ class ArticleMetadata(BaseModel):
             return slugify(title)
         url = data.get("url")
         if url:
-            return slugify(str(url))
+            return slug_from_url(str(url))
         raise ValueError("Cannot derive slug without title or url")
 
 
