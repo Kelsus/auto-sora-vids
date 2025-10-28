@@ -256,11 +256,8 @@ def test_stitch_final_uploads_video_and_completes(tmp_path):
     result = workflow.stitch_final(context)
 
     assert repo.updates[-1][1].status == "RUNNING"
-    assert storage.uploaded_files  # final video uploaded
-    uploaded_metadata = storage.uploaded_files[-1][2]
-    assert uploaded_metadata.get("job-id") == "story"
-    assert uploaded_metadata.get("drive-folder") == "folder-123"
-    assert result["finalVideoKey"].startswith(settings.final_video_prefix)
+    assert storage.uploaded_files == []  # final upload deferred until captions burn
+    assert result["finalVideoKey"] is None
 
 
 def test_generate_captions_skips_without_alignment(tmp_path):
@@ -273,10 +270,16 @@ def test_generate_captions_skips_without_alignment(tmp_path):
 
     metadata = JobMetadata(job_id="story", article_url="https://example.com/story")
     context = workflow.generate_prompts(metadata)
+    workflow.render_clip(ClipTask(job_context=context, clip_id="clip-1"))
+    workflow.render_clip(ClipTask(job_context=context, clip_id="clip-2"))
+    workflow.stitch_final(context)
 
     result = workflow.generate_captions(context)
 
     assert result["status"] == "SKIPPED"
+    latest_attrs = repo.updates[-1][1].attributes
+    assert latest_attrs.get("final_video_key", "").startswith(settings.final_video_prefix)
+    assert storage.uploaded_files  # final video published during caption stage
 
 
 def test_generate_captions_updates_status_with_alignment(tmp_path, monkeypatch):
@@ -313,6 +316,7 @@ def test_generate_captions_updates_status_with_alignment(tmp_path, monkeypatch):
     assert repo.updates[-1][1].status == "COMPLETED"
     latest_attrs = repo.updates[-1][1].attributes
     assert latest_attrs["captions_ass_key"].endswith("captions.ass")
+    assert latest_attrs["final_video_key"].startswith(settings.final_video_prefix)
     assert "error_message" in latest_attrs and latest_attrs["error_message"] is None
 
 

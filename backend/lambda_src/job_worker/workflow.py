@@ -54,7 +54,7 @@ class PipelineWorkflow:
         if job_id != bundle_slug:
             logger.warning("Job id %s differs from bundle slug %s; keeping original id", job_id, bundle_slug)
 
-        run_dir = self._local_run_dir(job_id)
+        run_dir = self._sync_run_directory(bundle, job_id, source_preference="slug")
         bundle_key = self._settings.bundle_key(job_id)
         output_prefix = self._settings.run_prefix(job_id)
 
@@ -90,25 +90,30 @@ class PipelineWorkflow:
         context = task.job_context
         self._refresh_local_run_dir(context.job_id, context.output_prefix)
         bundle = self._bundle_store.load(context.bundle_key)
-        run_dir = self._local_run_dir(context.job_id)
         runner = self._get_runner(context.pipeline_config)
         clip_result = runner.render_clip(bundle, task.clip_id, context.dry_run)
         updated_bundle = clip_result.bundle
         clip_path = clip_result.clip_asset
+        source_run_dir = self._settings.data_root / updated_bundle.article.slug
+        try:
+            relative_clip = clip_path.relative_to(source_run_dir)
+        except ValueError:
+            relative_clip = clip_path
+        run_dir = self._sync_run_directory(updated_bundle, context.job_id, source_preference="slug")
         self._write_bundle(run_dir, updated_bundle)
         self._bundle_store.save(context.bundle_key, updated_bundle)
         self._storage.upload_directory(run_dir, context.output_prefix)
 
-        try:
-            relative_clip = clip_path.relative_to(run_dir)
-        except ValueError:
-            relative_clip = clip_path
+        if isinstance(relative_clip, Path):
+            log_clip = relative_clip.as_posix()
+        else:
+            log_clip = str(relative_clip)
 
         logger.info(
             "Uploaded clip %s for job %s at %s",
             task.clip_id,
             context.job_id,
-            relative_clip,
+            log_clip,
         )
         return {"clipId": task.clip_id}
 
@@ -116,63 +121,62 @@ class PipelineWorkflow:
         self._refresh_local_run_dir(context.job_id, context.output_prefix)
         bundle = self._bundle_store.load(context.bundle_key)
         runner = self._get_runner(context.pipeline_config)
+        self._sync_run_directory(bundle, context.job_id, source_preference="job")
         result_bundle = runner.stitch_final(bundle, context.dry_run)
 
-        run_dir = self._local_run_dir(context.job_id)
+        run_dir = self._sync_run_directory(result_bundle, context.job_id, source_preference="slug")
         self._write_bundle(run_dir, result_bundle)
         self._bundle_store.save(context.bundle_key, result_bundle)
-        self._storage.upload_directory(run_dir, context.output_prefix)
-
-        final_video_path = result_bundle.final_video
-        absolute_final_video = None
-        if final_video_path:
-            absolute_final_video = Path(final_video_path)
-            if not absolute_final_video.is_absolute():
-                absolute_final_video = run_dir / absolute_final_video
-            if not absolute_final_video.exists():
-                absolute_final_video = None
-
+        absolute_final_video = self._resolve_final_video_path(run_dir, result_bundle.final_video)
         drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
-        final_video_key = self._copy_exports_to_final(
-            context.job_id,
-            run_dir,
-            absolute_final_video,
-            drive_folder,
+        self._publish_run_outputs(
+            job_id=context.job_id,
+            run_dir=run_dir,
+            prefix=context.output_prefix,
+            final_video_path=absolute_final_video,
+            drive_folder=drive_folder,
+            include_final=False,
         )
 
         attributes = {
             "output_bucket": self._settings.output_bucket,
             "output_prefix": context.output_prefix,
+            "error_message": None,
         }
-        if final_video_key:
-            attributes["final_video_key"] = final_video_key
-
-        attributes["error_message"] = None
-        attributes["error_message"] = None
         self._repository.update_status(context.job_id, JobStatusUpdate(status="RUNNING", attributes=attributes))
-        logger.info("Job %s completed", context.job_id)
-        return {"finalVideoKey": final_video_key}
+        logger.info("Job %s stitched; awaiting caption pass before final delivery", context.job_id)
+        return {"finalVideoKey": None}
 
     def generate_captions(self, context: JobContext) -> Dict[str, Any]:
         self._refresh_local_run_dir(context.job_id, context.output_prefix)
         bundle = self._bundle_store.load(context.bundle_key)
+        run_dir = self._local_run_dir(context.job_id)
+        absolute_final_video = self._resolve_final_video_path(run_dir, bundle.final_video)
+        drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
         if not bundle.narration_alignment_payload:
             logger.info("Skipping caption generation for job %s; no alignment payload", context.job_id)
+            final_video_key = self._publish_run_outputs(
+                job_id=context.job_id,
+                run_dir=run_dir,
+                prefix=context.output_prefix,
+                final_video_path=absolute_final_video,
+                drive_folder=drive_folder,
+                include_final=True,
+            )
+            attributes = {
+                "output_bucket": self._settings.output_bucket,
+                "output_prefix": context.output_prefix,
+                "captions_ass_key": None,
+                "error_message": None,
+            }
+            if final_video_key:
+                attributes["final_video_key"] = final_video_key
             self._repository.update_status(
                 context.job_id,
-                JobStatusUpdate(
-                    status="COMPLETED",
-                    attributes={
-                        "output_bucket": self._settings.output_bucket,
-                        "output_prefix": context.output_prefix,
-                        "captions_ass_key": None,
-                        "error_message": None,
-                    },
-                ),
+                JobStatusUpdate(status="COMPLETED", attributes=attributes),
             )
             return {"status": "SKIPPED"}
 
-        run_dir = self._local_run_dir(context.job_id)
         export_dir = run_dir / "exports"
         play_res = self._resolve_caption_play_res(context.pipeline_config)
         captions_path = write_karaoke_ass(
@@ -192,21 +196,17 @@ class PipelineWorkflow:
         self._write_bundle(run_dir, updated_bundle)
         self._bundle_store.save(context.bundle_key, updated_bundle)
 
-        absolute_final_video = None
-        if updated_bundle.final_video:
-            absolute_final_video = Path(updated_bundle.final_video)
-            if not absolute_final_video.is_absolute():
-                absolute_final_video = run_dir / absolute_final_video
-            if not absolute_final_video.exists():
-                absolute_final_video = None
-
-        drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
         if absolute_final_video:
             self._burn_captions_into_video(absolute_final_video, captions_path, export_dir)
 
-        self._storage.upload_directory(run_dir, context.output_prefix)
-
-        final_video_key = self._copy_exports_to_final(context.job_id, run_dir, absolute_final_video, drive_folder)
+        final_video_key = self._publish_run_outputs(
+            job_id=context.job_id,
+            run_dir=run_dir,
+            prefix=context.output_prefix,
+            final_video_path=absolute_final_video,
+            drive_folder=drive_folder,
+            include_final=True,
+        )
 
         try:
             captions_relative_export = captions_path.relative_to(export_dir).as_posix()
@@ -300,6 +300,38 @@ class PipelineWorkflow:
         bundle_path = run_dir / "bundle.json"
         bundle_path.write_text(json.dumps(bundle.model_dump(mode="json"), indent=2), encoding="utf-8")
 
+    def _sync_run_directory(self, bundle: PipelineBundle, job_id: str, source_preference: str = "slug") -> Path:
+        target_dir = self._local_run_dir(job_id)
+        slug = bundle.article.slug
+        source_dir = self._settings.data_root / slug
+        try:
+            target_resolved = target_dir.resolve()
+        except FileNotFoundError:
+            target_resolved = target_dir
+        try:
+            source_resolved = source_dir.resolve()
+        except FileNotFoundError:
+            source_resolved = source_dir
+
+        if source_resolved == target_resolved:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            return target_dir
+
+        preferred = source_preference.lower()
+        if preferred not in {"slug", "job"}:
+            raise ValueError(f"Invalid source_preference '{source_preference}'")
+
+        primary_dir = source_dir if preferred == "slug" else target_dir
+        mirror_dir = target_dir if preferred == "slug" else source_dir
+
+        if primary_dir.exists() and any(primary_dir.iterdir()):
+            if mirror_dir.exists():
+                shutil.rmtree(mirror_dir)
+            shutil.copytree(primary_dir, mirror_dir)
+        else:
+            mirror_dir.mkdir(parents=True, exist_ok=True)
+        return target_dir
+
     def _refresh_local_run_dir(self, job_id: str, prefix: str) -> None:
         run_dir = self._local_run_dir(job_id)
         if run_dir.exists():
@@ -326,6 +358,36 @@ class PipelineWorkflow:
             )
             self._runner_cache[signature] = runner
         return runner
+
+    def _resolve_final_video_path(self, run_dir: Path, final_video: Optional[Path | str]) -> Optional[Path]:
+        if not final_video:
+            return None
+        candidate = Path(final_video)
+        if not candidate.is_absolute():
+            candidate = run_dir / candidate
+        if not candidate.exists():
+            return None
+        return candidate
+
+    def _publish_run_outputs(
+        self,
+        *,
+        job_id: str,
+        run_dir: Path,
+        prefix: str,
+        final_video_path: Optional[Path],
+        drive_folder: Optional[str],
+        include_final: bool,
+    ) -> Optional[str]:
+        self._storage.upload_directory(run_dir, prefix)
+        if not include_final:
+            return None
+        return self._copy_exports_to_final(
+            job_id=job_id,
+            run_dir=run_dir,
+            final_video_path=final_video_path,
+            drive_folder=drive_folder,
+        )
 
     def _copy_exports_to_final(
         self,

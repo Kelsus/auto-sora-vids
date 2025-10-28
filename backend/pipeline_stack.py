@@ -182,7 +182,8 @@ class VideoAutomationStack(Stack):
             secrets.choice(string.ascii_letters + string.digits)
             for _ in range(40)
         )
-        api_key_name = f"video-automation-{stage}-{self.node.addr[:8]}"
+        suffix = api_key_value[:8].lower()
+        api_key_name = f"video-automation-{stage}-{suffix}"
         api_key = apigateway.ApiKey(
             self,
             "VideoJobsApiKey",
