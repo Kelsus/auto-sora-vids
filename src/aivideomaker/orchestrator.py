@@ -9,7 +9,7 @@ import textwrap
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, ClassVar, Iterable, NamedTuple, Optional
 
 from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field
@@ -26,16 +26,29 @@ from aivideomaker.script_engine.model import Beat, BeatQCRules, BeatVisualSpec, 
 from aivideomaker.script_engine.utils import load_json_with_repair
 from aivideomaker.script_engine.reviewer import ScriptReviewDecision, ScriptReviewer
 from aivideomaker.media_pipeline.chart_renderer import ChartRenderer
+from aivideomaker.media_pipeline.chart_ai_prompt import build_chart_codegen_spec
+from aivideomaker.media_pipeline.openai_chart_client import OpenAIChartClient
 from aivideomaker.media_pipeline.elevenlabs_client import ElevenLabsClient
 from aivideomaker.media_pipeline.sora_client import SoraClient
 from aivideomaker.media_pipeline.still_image_client import StillImageClient
+from aivideomaker.media_pipeline.still_scene_prompter import ScenePrompt, StillScenePrompter
 from aivideomaker.media_pipeline.veo_client import VeoClient
 from aivideomaker.media_pipeline.voice import VoiceSessionManager, NarrationAsset
 from aivideomaker.media_pipeline.elevenlabs_music_client import ElevenLabsMusicClient
 from aivideomaker.orchestrator_chart_models import ChartSpec
 from aivideomaker.stitcher.assembler import Stitcher, CaptionSegment
 from aivideomaker.captions.ass_builder import write_karaoke_ass
-from moviepy.editor import ImageClip
+from moviepy.editor import CompositeVideoClip, ImageClip
+
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+try:  # Pillow 10 removed Image.ANTIALIAS; keep compatibility for moviepy
+    from PIL import Image as _PILImage
+
+    if not hasattr(_PILImage, "ANTIALIAS") and hasattr(_PILImage, "Resampling"):
+        _PILImage.ANTIALIAS = _PILImage.Resampling.LANCZOS  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - optional dependency
+    pass
 
 
 _dotenv_path = find_dotenv(usecwd=True)
@@ -47,6 +60,11 @@ logger = logging.getLogger(__name__)
 
 class ScriptRejectedError(RuntimeError):
     """Raised when a script is rejected and the pipeline should halt gracefully."""
+
+
+class VisualClassification(NamedTuple):
+    mode: str
+    data: dict[str, Any]
 
 
 class VisualStyle(BaseModel):
@@ -174,6 +192,10 @@ class PipelineConfig(BaseModel):
     veo_credentials_path: Optional[Path] = None
     veo_credentials_parameter: Optional[str] = None
     style_template_path: Optional[Path] = None
+    enable_openai_charts: bool = False
+    openai_chart_model: str = "gpt-5"
+    openai_api_key_env: str = "OPENAI_API_KEY"
+    openai_assistant_id: Optional[str] = None
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineConfig":
@@ -253,6 +275,83 @@ class PipelineOrchestrator:
     style_template: Optional[StyleTemplate] = None
     still_image_client: Optional[StillImageClient] = None
     chart_renderer: Optional[ChartRenderer] = None
+    openai_chart_client: Optional[OpenAIChartClient] = None
+    still_scene_prompter: Optional[StillScenePrompter] = None
+    _kenburns_index: int = 0
+
+    _KENBURNS_PATTERNS: ClassVar[list[dict[str, Any]]] = [
+        {
+            "name": "zoom_in_center",
+            "start_scale": 1.0,
+            "end_scale": 1.12,
+            "start_center": (0.5, 0.5),
+            "end_center": (0.5, 0.5),
+            "scale_strength": 1.0,
+            "pan_strength": 0.0,
+            "scale_ease": "ease_in_out",
+            "hold": {"start": 0.12, "end": 0.12},
+        },
+        {
+            "name": "pan_left_to_right",
+            "start_scale": 1.08,
+            "end_scale": 1.12,
+            "start_center": (0.42, 0.5),
+            "end_center": (0.6, 0.5),
+            "scale_strength": 0.6,
+            "pan_strength": 1.0,
+            "scale_ease": "ease_in_out",
+            "pan_ease": "ease_in_out",
+            "hold": {"start": 0.08, "end": 0.1},
+        },
+        {
+            "name": "zoom_out_down",
+            "start_scale": 1.16,
+            "end_scale": 1.0,
+            "start_center": (0.5, 0.46),
+            "end_center": (0.5, 0.58),
+            "scale_strength": 1.0,
+            "pan_strength": 0.75,
+            "scale_ease": "ease_in_out",
+            "pan_ease": "ease_out",
+            "hold": {"start": 0.1, "end": 0.18},
+        },
+        {
+            "name": "pan_bottom_to_top",
+            "start_scale": 1.08,
+            "end_scale": 1.08,
+            "start_center": (0.5, 0.64),
+            "end_center": (0.5, 0.36),
+            "scale_strength": 0.55,
+            "pan_strength": 1.0,
+            "scale_ease": "ease_out",
+            "pan_ease": "ease_in_out",
+            "hold": {"start": 0.05, "end": 0.12},
+        },
+        {
+            "name": "zoom_in_rule_of_thirds",
+            "start_scale": 1.02,
+            "end_scale": 1.16,
+            "start_center": (0.38, 0.56),
+            "end_center": (0.32, 0.46),
+            "scale_strength": 1.0,
+            "pan_strength": 0.65,
+            "scale_ease": "ease_in_out",
+            "pan_ease": "ease_in_out",
+            "hold": {"start": 0.08, "end": 0.1},
+        },
+        {
+            "name": "drift_diagonal",
+            "start_scale": 1.1,
+            "end_scale": 1.06,
+            "start_center": (0.58, 0.42),
+            "end_center": (0.42, 0.58),
+            "scale_strength": 0.8,
+            "pan_strength": 0.9,
+            "scale_ease": "ease_out",
+            "pan_ease": "ease_in_out",
+            "hold": {"start": 0.06, "end": 0.14},
+        },
+    ]
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineOrchestrator":
@@ -346,16 +445,29 @@ class PipelineOrchestrator:
             if style_template and style_template.style_bible
             else None
         )
+        credentials_path = config.veo_credentials_path or os.getenv("GEMINI_KEY_FILE")
         still_client = StillImageClient(
             asset_dir=placeholder_root / "stills",
             api_key=os.getenv(config.veo_api_key_env),
             use_vertex=config.veo_use_vertex,
             project=config.veo_project,
             location=config.veo_location,
+            credentials_path=credentials_path,
         )
         chart_renderer = ChartRenderer(placeholder_root / "charts")
+        openai_chart_client: Optional[OpenAIChartClient] = None
+        if config.enable_openai_charts:
+            try:
+                openai_chart_client = OpenAIChartClient(
+                    model=config.openai_chart_model,
+                    api_key_env=config.openai_api_key_env,
+                    assistant_id=config.openai_assistant_id,
+                )
+            except Exception as exc:
+                logger.warning("OpenAI chart client disabled due to initialization error: %s", exc)
+                openai_chart_client = None
 
-        return cls(
+        orchestrator = cls(
             config=config,
             article_ingestor=ArticleIngestor(),
             script_engine=ScriptEngine(llm=llm_client),
@@ -377,7 +489,11 @@ class PipelineOrchestrator:
             style_template=style_template,
             still_image_client=still_client,
             chart_renderer=chart_renderer,
+            openai_chart_client=openai_chart_client,
+            still_scene_prompter=StillScenePrompter(),
         )
+        orchestrator._kenburns_index = 0
+        return orchestrator
 
     @staticmethod
     def _load_style_template(config: PipelineConfig) -> Optional[StyleTemplate]:
@@ -422,6 +538,7 @@ class PipelineOrchestrator:
         overrides = template.beat_overrides
         defaults = template.beats_meta_defaults
         updated_beats = []
+        classification_history: list[dict[str, Any]] = []
 
         for beat in script.beats:
             update: dict[str, Any] = {}
@@ -461,51 +578,217 @@ class PipelineOrchestrator:
             if current_visual:
                 visual_type = current_visual.type
 
+            classification: VisualClassification | None = None
             if visual_type in (None, "", "cinematic_broll"):
-                inferred_type = self._classify_visual_mode(beat)
+                classification = self._classify_visual_mode(beat, classification_history)
+                inferred_type = classification.mode
                 if inferred_type and inferred_type != "cinematic_broll":
                     if current_visual:
-                        update["visual"] = current_visual.model_copy(update={"type": inferred_type})
+                        new_visual = current_visual.model_copy(update={"type": inferred_type})
                     else:
-                        update["visual"] = BeatVisualSpec(type=inferred_type)
+                        new_visual = BeatVisualSpec(type=inferred_type)
+                    new_visual = self._merge_visual_metadata(new_visual, classification.data)
+                    new_visual = self._ensure_visual_defaults(new_visual, classification.data)
+                    update["visual"] = new_visual
+
+            final_visual = update.get("visual") or beat.visual
 
             if update:
                 beat = beat.model_copy(update=update)
+                final_visual = beat.visual
             updated_beats.append(beat)
+
+            history_entry = {
+                "beat_id": beat.id,
+                "visual_type": (final_visual.type if final_visual else "cinematic_broll"),
+                "chart_variant": getattr(final_visual, "chart_variant", None) if final_visual else None,
+            }
+            classification_history.append(history_entry)
 
         return script.model_copy(update={"beats": updated_beats})
 
-    def _classify_visual_mode(self, beat: Beat) -> str:
+    def _classify_visual_mode(
+        self,
+        beat: Beat,
+        history: list[dict[str, Any]] | None = None,
+    ) -> VisualClassification:
         llm = getattr(self.script_engine, "llm", None)
         if llm is None:
-            return "cinematic_broll"
+            return VisualClassification("cinematic_broll", {})
+
+        history = history or []
+        history_lines = []
+        for item in history:
+            visual_type = item.get("visual_type", "cinematic_broll")
+            variant = item.get("chart_variant")
+            if variant and visual_type == "chart":
+                history_lines.append(f"{item['beat_id']}: chart ({variant})")
+            else:
+                history_lines.append(f"{item['beat_id']}: {visual_type}")
+        history_text = "None yet" if not history_lines else "; ".join(history_lines)
 
         instructions = textwrap.dedent(
             """
             You are selecting a visual production approach for a short-form documentary beat.
-            Choose one of the following categories:
-              - "chart" when the narration focuses on numeric data, stats, or would benefit from a data visualization or on-screen text.
-              - "still_motion" when the narration references text/quotes, detailed wording, or visuals better served by a still image with light motion.
-              - "cinematic_broll" when the narration describes environments, people, or actions that should be depicted with motion footage.
+            Available options for "visual_type":
+              - "chart" → choose when the narration leans on data, percentages, comparisons, or is best conveyed with on-screen text/graphics.
+              - "still_motion" → choose when the narration references quotes, specific wording, or any text-centric content suited to a still image plus subtle motion.
+              - "cinematic_broll" → choose when the narration describes scenes, actions, places, or people that call for full-motion footage.
 
-            Respond with a JSON object like {"visual_type": "chart"}.
+            Output requirements:
+              - Respond with valid JSON only, without code fences or commentary.
+              - Use this schema:
+                {
+                  "visual_type": "chart|still_motion|cinematic_broll",
+                  "chart": {
+                    "variant": "donut|bar|line|area|combo|other",
+                    "reason": "short explanation",
+                    "data_available": true|false,
+                    "should_render": true|false,
+                    "duplicates_previous": true|false,
+                    "title": "optional headline for the chart",
+                    "subtitle": "optional supporting line",
+                    "x_label": "optional x-axis label",
+                    "y_label": "optional y-axis label",
+                    "note": "optional footnote or citation",
+                    "data_points": [
+                      {
+                        "label": "category or timestamp",
+                        "value": number,
+                        "secondary_value": number | null,
+                        "series": "series/group name" | null
+                      }
+                    ]
+                  },
+                  "still_motion": {
+                    "focus": "primary subject for the still",
+                    "reason": "short explanation"
+                  }
+                }
+              - Only set chart.should_render to true when the beat supplies concrete, label-able data and the visualization adds something new compared to prior beats.
+              - If the narration is qualitative or repeats a previous chart insight, prefer "still_motion" and explain the focus.
+              - Prior visuals so far: {history_text}
             """
         ).strip()
         payload = {
             "transcript": beat.transcript,
             "visual_seed": beat.visual_seed or "",
             "purpose": beat.purpose,
+            "previous_visuals": history,
         }
         prompt = f"{instructions}\nInput:{json.dumps(payload, ensure_ascii=False)}"
         try:
             raw = llm.complete(prompt)
+            logger.debug("Visual classification raw response for beat %s: %s", beat.id if beat else "<unknown>", raw)
             data = load_json_with_repair(raw, logger=logger)
+            metadata = {
+                "chart": data.get("chart") or {},
+                "still_motion": data.get("still_motion") or {},
+            }
             mode = str(data.get("visual_type", "cinematic_broll")).lower()
+            if mode == "chart":
+                chart_info = metadata["chart"]
+                data_available = bool(chart_info.get("data_available", True))
+                should_render = bool(chart_info.get("should_render", True))
+                duplicates_previous = bool(chart_info.get("duplicates_previous", False))
+                if not data_available or not should_render:
+                    fallback_mode = "still_motion" if metadata["still_motion"].get("focus") else "cinematic_broll"
+                    metadata.setdefault("chart", {})["fallback"] = "insufficient_data" if not data_available else "duplicate_chart"
+                    chart_info["should_render"] = should_render and data_available and not duplicates_previous
+                    mode = fallback_mode
+                else:
+                    chart_info["should_render"] = True and not duplicates_previous
+                    if duplicates_previous:
+                        metadata.setdefault("chart", {})["fallback"] = "duplicate_chart"
+                        fallback_mode = "still_motion" if metadata["still_motion"].get("focus") else "cinematic_broll"
+                        chart_info["should_render"] = False
+                        mode = fallback_mode
             if mode in {"chart", "still_motion", "cinematic_broll"}:
-                return mode
+                return VisualClassification(mode, metadata)
         except Exception as exc:  # pragma: no cover - LLM fallback
             logger.debug("Visual classification fallback due to error: %s", exc)
-        return "cinematic_broll"
+        return VisualClassification("cinematic_broll", {})
+
+    def _merge_visual_metadata(self, visual: BeatVisualSpec, metadata: dict[str, Any]) -> BeatVisualSpec:
+        updates: dict[str, Any] = {}
+        chart_info = metadata.get("chart") or {}
+        if chart_info:
+            if "variant" in chart_info:
+                updates["chart_variant"] = chart_info.get("variant")
+            if "reason" in chart_info:
+                updates["chart_reason"] = chart_info.get("reason")
+            if "data_available" in chart_info:
+                updates["chart_data_available"] = chart_info.get("data_available")
+            if "should_render" in chart_info:
+                updates["chart_should_render"] = chart_info.get("should_render")
+            if "duplicates_previous" in chart_info:
+                updates["chart_duplicates_previous"] = chart_info.get("duplicates_previous")
+            if "title" in chart_info:
+                updates["chart_title"] = chart_info.get("title")
+            if "subtitle" in chart_info:
+                updates["chart_subtitle"] = chart_info.get("subtitle")
+            if "x_label" in chart_info:
+                updates["chart_x_label"] = chart_info.get("x_label")
+            if "y_label" in chart_info:
+                updates["chart_y_label"] = chart_info.get("y_label")
+            if "note" in chart_info:
+                updates["chart_note"] = chart_info.get("note")
+            if "data_points" in chart_info:
+                updates["chart_series"] = chart_info.get("data_points")
+        still_info = metadata.get("still_motion") or {}
+        if still_info:
+            if "focus" in still_info:
+                updates["still_focus"] = still_info.get("focus")
+            if "reason" in still_info:
+                updates["still_reason"] = still_info.get("reason")
+        if not updates:
+            return visual
+        return visual.model_copy(update=updates)
+
+    def _ensure_visual_defaults(
+        self,
+        visual: BeatVisualSpec,
+        metadata: dict[str, Any] | None = None,
+    ) -> BeatVisualSpec:
+        if visual.type and visual.type.lower() == "chart" and not visual.spec_id:
+            variant = None
+            if metadata:
+                variant = (metadata.get("chart") or {}).get("variant")
+            spec_id = self._spec_id_for_variant(variant)
+            if spec_id:
+                return visual.model_copy(update={"spec_id": spec_id})
+        return visual
+
+    def _default_chart_spec_id(self) -> str | None:
+        if self.style_template and self.style_template.chart_specs:
+            for key in self.style_template.chart_specs:
+                return key
+        return None
+
+    def _spec_id_for_variant(self, variant: str | None) -> str | None:
+        if self.style_template and self.style_template.chart_specs:
+            if variant and variant in self.style_template.chart_specs:
+                return variant
+            if variant:
+                normalized = variant.lower()
+                for key in self.style_template.chart_specs:
+                    if normalized in key.lower():
+                        return key
+        if not variant:
+            return self._default_chart_spec_id()
+        lookup = {
+            "donut": "sample_donut",
+            "pie": "sample_donut",
+            "bar": "sample_bar",
+            "column": "sample_bar",
+            "line": "sample_line",
+            "trend": "sample_line",
+            "area": "sample_line",
+        }
+        spec_id = lookup.get(variant.lower())
+        if spec_id and self.style_template and spec_id in self.style_template.chart_specs:
+            return spec_id
+        return self._default_chart_spec_id()
 
     def _build_initial_bundle(
         self,
@@ -747,7 +1030,7 @@ class PipelineOrchestrator:
         visual_mode = self._resolve_visual_mode(beat)
 
         existing_clip = self._existing_clip_path(run_dirs, clip_id)
-        if existing_clip:
+        if existing_clip and visual_mode not in {"chart", "still_motion", "still"}:
             logger.info("♻️  Reusing existing clip for %s at %s", clip_id, existing_clip)
             return ClipRenderResult(bundle=bundle, clip_id=clip_id, clip_asset=existing_clip)
 
@@ -756,7 +1039,7 @@ class PipelineOrchestrator:
         if visual_mode == "chart":
             clip_path = self._render_chart_clip(bundle, beat, run_dirs, clip_id, prompt)
         if clip_path is None and visual_mode in {"still_motion", "still"}:
-            clip_path = self._render_still_clip(prompt, run_dirs, clip_id)
+            clip_path = self._render_still_clip(prompt, run_dirs, clip_id, beat)
 
         provider = self.config.media_provider.lower()
         if clip_path is None:
@@ -835,10 +1118,39 @@ class PipelineOrchestrator:
         prompt: MediaPrompt,
         run_dirs: dict[str, Path],
         clip_id: str,
+        beat: Beat | None,
     ) -> Path:
         if not self.still_image_client:
             raise RuntimeError("Still image client is not configured")
-        image_path = self.still_image_client.generate(prompt.visual_prompt, prompt.negative_prompt, clip_id)
+        if not self.still_scene_prompter:
+            raise RuntimeError("Still scene prompter is not configured")
+        scene_prompt = self.still_scene_prompter.build_still_scene_prompt(prompt, beat)
+        final_prompt = scene_prompt.prompt
+        use_vertex = bool(getattr(self.still_image_client, "use_vertex", False))
+        negative_for_client: Optional[str] = None
+        if prompt.negative_prompt:
+            final_prompt = (
+                f"{final_prompt}\nAvoid the following visual elements: {prompt.negative_prompt}."
+            )
+            if not use_vertex:
+                negative_for_client = prompt.negative_prompt
+        negative_for_client = (
+            negative_for_client if negative_for_client is not None else None
+        )
+        self._log_scene_prompt(
+            run_dirs["stills_dir"],
+            clip_id,
+            final_prompt,
+            negative_for_client,
+            scene_type="still_scene",
+            extra=scene_prompt.metadata,
+        )
+        image_path = self.still_image_client.generate(
+            final_prompt,
+            negative_for_client,
+            clip_id,
+            aspect_ratio="9:16",
+        )
         if not Path(image_path).is_absolute():
             image_path = run_dirs["stills_dir"] / Path(image_path)
         duration = max(float(prompt.duration_sec or 3.0), 1.5)
@@ -852,15 +1164,351 @@ class PipelineOrchestrator:
         clip_id: str,
         prompt: MediaPrompt,
     ) -> Optional[Path]:
-        if not self.chart_renderer or not beat or not beat.visual or not beat.visual.spec_id:
+        if not beat or not beat.visual:
             return None
-        spec = bundle.chart_specs.get(beat.visual.spec_id)
-        if not spec:
-            logger.warning("No chart spec '%s' found; falling back to still generation", beat.visual.spec_id)
-            return None
-        image_path = self.chart_renderer.render(spec, clip_id)
+
+        charts_dir = run_dirs["charts_dir"]
+        chart_png: Optional[Path] = None
+
+        if self.openai_chart_client:
+            try:
+                spec = build_chart_codegen_spec(beat)
+                chart_png = self.openai_chart_client.generate_chart(spec, charts_dir, clip_id)
+                logger.info("🧑‍🎨  OpenAI generated chart for %s at %s", clip_id, chart_png)
+            except Exception as exc:
+                logger.warning("OpenAI chart generation failed for %s: %s", clip_id, exc)
+                chart_png = None
+
+        if chart_png is None:
+            if not self.chart_renderer or not beat.visual.spec_id:
+                return None
+            spec = bundle.chart_specs.get(beat.visual.spec_id)
+            if not spec:
+                logger.warning("No chart spec '%s' found; falling back to still generation", beat.visual.spec_id)
+                return None
+            chart_png = Path(self.chart_renderer.render(spec, clip_id))
+
+        scene_path = self._compose_chart_scene(chart_png, beat, run_dirs, clip_id, prompt)
+        if scene_path is None:
+            # Absolute fallback: use the raw chart image
+            scene_path = chart_png
+
         duration = max(float(prompt.duration_sec or 3.0), 2.0)
-        return self._image_to_video(Path(image_path), run_dirs["sora_dir"], clip_id, duration)
+        return self._image_to_video(Path(scene_path), run_dirs["sora_dir"], clip_id, duration)
+
+    def _compose_chart_scene(
+        self,
+        chart_image: Path,
+        beat: Beat | None,
+        run_dirs: dict[str, Path],
+        clip_id: str,
+        prompt: MediaPrompt,
+    ) -> Path:
+        stills_dir = run_dirs["stills_dir"]
+        stills_dir.mkdir(parents=True, exist_ok=True)
+        target = stills_dir / f"{clip_id}.png"
+
+        if self.still_image_client and self.still_scene_prompter:
+            scene_prompt = self.still_scene_prompter.build_chart_scene_prompt(
+                prompt,
+                beat,
+                chart_image,
+            )
+            final_prompt = scene_prompt.prompt
+            use_vertex = bool(getattr(self.still_image_client, "use_vertex", False))
+            negative_for_client: Optional[str] = None
+            if prompt.negative_prompt:
+                final_prompt = (
+                    f"{final_prompt}\nAvoid the following visual elements: {prompt.negative_prompt}."
+                )
+                if not use_vertex:
+                    negative_for_client = prompt.negative_prompt
+            self._log_scene_prompt(
+                stills_dir,
+                clip_id,
+                final_prompt,
+                negative_for_client,
+                scene_type="chart_scene",
+                extra=scene_prompt.metadata,
+            )
+            try:
+                generated_path = Path(
+                    self.still_image_client.generate(
+                        prompt=final_prompt,
+                        negative=negative_for_client,
+                        output_name=clip_id,
+                        image_prompts=[chart_image],
+                        aspect_ratio="9:16",
+                    )
+                )
+                if not generated_path.is_absolute():
+                    generated_path = stills_dir / generated_path
+                if generated_path.exists():
+                    if generated_path != target:
+                        shutil.copyfile(generated_path, target)
+                    else:
+                        target = generated_path
+                    return target
+            except Exception as exc:  # pragma: no cover - defensive around external service
+                logger.warning("Still image client failed to compose chart scene: %s", exc)
+
+        return self._compose_chart_scene_stub(chart_image, target, beat)
+
+    def _compose_chart_scene_stub(self, chart_image: Path, target: Path, beat: Beat | None) -> Path:
+        self._log_scene_prompt(
+            target.parent,
+            target.stem,
+            "Fallback chart scene stub prompt",
+            None,
+            scene_type="chart_scene_stub",
+            extra={"chart_image": str(chart_image)},
+        )
+        try:
+            chart = Image.open(chart_image).convert("RGBA")
+        except Exception:
+            chart = None
+
+        scene = Image.new("RGBA", (1080, 1920), (26, 34, 48, 255))
+        draw = ImageDraw.Draw(scene)
+
+        # Create a simple workspace backdrop
+        draw.rectangle([0, int(scene.height * 0.55), scene.width, scene.height], fill=(18, 22, 30, 255))
+        draw.rectangle(
+            [int(scene.width * 0.08), int(scene.height * 0.14), int(scene.width * 0.92), int(scene.height * 0.62)],
+            fill=(12, 16, 24, 245),
+            outline=(88, 104, 128, 255),
+            width=4,
+        )
+
+        if chart is not None:
+            monitor_width = int(scene.width * 0.78)
+            monitor_height = int(scene.height * 0.38)
+            chart_resized = chart.resize((monitor_width, monitor_height), Image.LANCZOS)
+            paste_x = (scene.width - monitor_width) // 2
+            paste_y = int(scene.height * 0.18)
+            scene.alpha_composite(chart_resized, dest=(paste_x, paste_y))
+
+        title_text = beat.purpose if beat else "Data Insight"
+        font_title = self._load_font(48)
+        draw.text((scene.width // 2, int(scene.height * 0.64)), title_text, font=font_title, fill=(230, 235, 242, 255), anchor="ma")
+
+        final = scene.convert("RGB")
+        final.save(target, format="PNG")
+        return target
+
+    def _log_scene_prompt(
+        self,
+        stills_dir: Path,
+        clip_id: str,
+        prompt_text: str,
+        negative_prompt: Optional[str],
+        *,
+        scene_type: str,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> None:
+        try:
+            prompts_dir = stills_dir / "_prompts"
+            prompts_dir.mkdir(parents=True, exist_ok=True)
+            payload: dict[str, Any] = {
+                "scene_type": scene_type,
+                "prompt": prompt_text,
+                "negative_prompt": negative_prompt,
+            }
+            if extra:
+                payload.update(extra)
+            (prompts_dir / f"{clip_id}.json").write_text(
+                json.dumps(payload, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:  # pragma: no cover - logging is best-effort
+            logger.debug("Failed to log scene prompt for %s: %s", clip_id, exc)
+
+    def _load_font(self, size: int) -> ImageFont.FreeTypeFont:
+        try:
+            return ImageFont.truetype("DejaVuSans.ttf", size=size)
+        except Exception:  # pragma: no cover
+            return ImageFont.load_default()
+
+    def _prepare_frame_for_video(self, image_path: Path) -> Path:
+        """Return path to a 1080x1920 RGB frame suitable for encoding."""
+        try:
+            with Image.open(image_path) as img:
+                img = img.convert("RGB")
+                original_size = img.size
+                target_size = (1080, 1920)
+                fitted = ImageOps.fit(img, target_size, method=Image.LANCZOS, centering=(0.5, 0.5))
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to prepare frame %s: %s", image_path, exc)
+            return image_path
+
+        if original_size == target_size and image_path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
+            return image_path
+
+        temp_path = image_path.with_suffix(".prepared.png")
+        fitted.save(temp_path, format="PNG")
+        return temp_path
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        if value < 0.0:
+            return 0.0
+        if value > 1.0:
+            return 1.0
+        return value
+
+    @classmethod
+    def _kenburns_duration_scale(cls, duration: float) -> float:
+        if duration <= 1.5:
+            return 0.35
+        if duration >= 5.0:
+            return 1.0
+        span = 5.0 - 1.5
+        return 0.35 + ((duration - 1.5) / span) * (1.0 - 0.35)
+
+    @classmethod
+    def _kenburns_progress(
+        cls,
+        t: float,
+        total: float,
+        *,
+        hold_start: float = 0.0,
+        hold_end: float = 0.0,
+    ) -> float:
+        if total <= 0:
+            return 1.0
+        normalized = cls._clamp01(t / total)
+        hold_start = cls._clamp01(hold_start)
+        hold_end = cls._clamp01(hold_end)
+        hold_total = hold_start + hold_end
+        if hold_total >= 0.98:
+            return 1.0 if normalized >= 0.5 else 0.0
+        active_span = 1.0 - hold_total
+        if normalized <= hold_start:
+            return 0.0
+        if normalized >= 1.0 - hold_end:
+            return 1.0
+        return (normalized - hold_start) / active_span
+
+    @staticmethod
+    def _kenburns_apply_ease(value: float, easing: str | None) -> float:
+        value = PipelineOrchestrator._clamp01(value)
+        if not easing:
+            return value
+        key = easing.lower()
+        if key in {"linear", "none"}:
+            return value
+        if key in {"ease_in", "ease_in_quad"}:
+            return value * value
+        if key in {"ease_out", "ease_out_quad"}:
+            inv = 1.0 - value
+            return 1.0 - inv * inv
+        if key in {"ease_in_cubic"}:
+            return value * value * value
+        if key in {"ease_out_cubic"}:
+            inv = 1.0 - value
+            return 1.0 - inv * inv * inv
+        if key in {"ease_in_out", "smoothstep"}:
+            return value * value * (3.0 - 2.0 * value)
+        return value
+
+    @classmethod
+    def _kenburns_motion_spec(
+        cls,
+        pattern: dict[str, Any],
+        duration: float,
+    ) -> dict[str, Any]:
+        start_scale = float(pattern.get("start_scale", 1.0))
+        end_scale_raw = float(pattern.get("end_scale", 1.0))
+
+        start_center_raw = pattern.get("start_center", (0.5, 0.5))
+        end_center_raw = pattern.get("end_center", start_center_raw)
+        start_center = (
+            cls._clamp01(float(start_center_raw[0])),
+            cls._clamp01(float(start_center_raw[1])),
+        )
+        end_center_target = (
+            cls._clamp01(float(end_center_raw[0])),
+            cls._clamp01(float(end_center_raw[1])),
+        )
+
+        hold_cfg = pattern.get("hold") or {}
+        hold_start = cls._clamp01(float(hold_cfg.get("start", 0.0)))
+        hold_end = cls._clamp01(float(hold_cfg.get("end", 0.0)))
+
+        duration_scale = cls._kenburns_duration_scale(duration)
+
+        scale_strength = float(pattern.get("scale_strength", pattern.get("motion_strength", 1.0)))
+        pan_strength = float(pattern.get("pan_strength", pattern.get("motion_strength", 1.0)))
+        scale_strength = cls._clamp01(scale_strength * duration_scale)
+        pan_strength = cls._clamp01(pan_strength * duration_scale)
+
+        end_scale = start_scale + (end_scale_raw - start_scale) * scale_strength
+        end_center = (
+            cls._clamp01(start_center[0] + (end_center_target[0] - start_center[0]) * pan_strength),
+            cls._clamp01(start_center[1] + (end_center_target[1] - start_center[1]) * pan_strength),
+        )
+
+        return {
+            "start_scale": start_scale,
+            "end_scale": end_scale,
+            "start_center": start_center,
+            "end_center": end_center,
+            "hold_start": hold_start,
+            "hold_end": hold_end,
+            "scale_ease": pattern.get("scale_ease") or pattern.get("ease") or "smoothstep",
+            "pan_ease": pattern.get("pan_ease") or pattern.get("ease") or "smoothstep",
+        }
+
+    def _build_kenburns_clip(self, image_path: Path, duration: float) -> CompositeVideoClip:
+        pattern = self._KENBURNS_PATTERNS[self._kenburns_index % len(self._KENBURNS_PATTERNS)]
+        self._kenburns_index += 1
+
+        base_clip = ImageClip(str(image_path))
+        frame_w, frame_h = base_clip.size
+        total = max(duration, 0.01)
+
+        motion = self._kenburns_motion_spec(pattern, total)
+
+        start_scale = motion["start_scale"]
+        end_scale = motion["end_scale"]
+        start_center = motion["start_center"]
+        end_center = motion["end_center"]
+        hold_start = motion["hold_start"]
+        hold_end = motion["hold_end"]
+        scale_ease = motion["scale_ease"]
+        pan_ease = motion["pan_ease"]
+
+        start_center_px = (start_center[0] * frame_w, start_center[1] * frame_h)
+        end_center_px = (end_center[0] * frame_w, end_center[1] * frame_h)
+
+        def scale_progress(t: float) -> float:
+            base = self._kenburns_progress(t, total, hold_start=hold_start, hold_end=hold_end)
+            return self._kenburns_apply_ease(base, scale_ease)
+
+        def pan_progress(t: float) -> float:
+            base = self._kenburns_progress(t, total, hold_start=hold_start, hold_end=hold_end)
+            return self._kenburns_apply_ease(base, pan_ease)
+
+        def scale_func(t: float) -> float:
+            p = scale_progress(t)
+            return start_scale + (end_scale - start_scale) * p
+
+        def center_func(t: float) -> tuple[float, float]:
+            p = pan_progress(t)
+            cx = start_center_px[0] + (end_center_px[0] - start_center_px[0]) * p
+            cy = start_center_px[1] + (end_center_px[1] - start_center_px[1]) * p
+            return cx, cy
+
+        def position_func(t: float) -> tuple[float, float]:
+            s = scale_func(t)
+            cx, cy = center_func(t)
+            w = frame_w * s
+            h = frame_h * s
+            return cx - w / 2.0, cy - h / 2.0
+
+        animated = base_clip.resize(lambda t: scale_func(t)).set_position(position_func)
+        composite = CompositeVideoClip([animated], size=(frame_w, frame_h)).set_duration(duration)
+        return composite
 
     def _image_to_video(
         self,
@@ -871,17 +1519,21 @@ class PipelineOrchestrator:
     ) -> Path:
         target_dir.mkdir(parents=True, exist_ok=True)
         output = target_dir / f"{clip_id}.mp4"
-        clip = ImageClip(str(image_path))
-        clip = clip.set_duration(duration).resize(height=1920)
-        if clip.w > 1080:
-            clip = clip.crop(x_center=clip.w / 2, width=1080)
-        elif clip.w < 1080:
-            clip = clip.resize(width=1080)
-        zoom_factor = 0.05
-        clip = clip.resize(lambda t: 1 + zoom_factor * (t / max(duration, 1.0)))
-        clip = clip.set_fps(30)
-        clip.write_videofile(str(output), codec="libx264", audio=False, bitrate="4000k", logger=None)
+        prepared = self._prepare_frame_for_video(image_path)
+        clip = self._build_kenburns_clip(prepared, duration).set_fps(30)
+        clip.write_videofile(
+            str(output),
+            codec="libx264",
+            audio=False,
+            bitrate="4000k",
+            logger=None,
+        )
         clip.close()
+        if prepared != image_path:
+            try:
+                prepared.unlink()
+            except OSError:
+                pass
         return output
 
     def _fallback_prompt(self, bundle: PipelineBundle, clip_id: str) -> MediaPrompt:
@@ -995,7 +1647,7 @@ class PipelineOrchestrator:
             print("Please respond with 'y' or 'n'.")
 
     def _prepare_run_environment(self, slug: str, output_dir: Path, cleanup: bool) -> dict[str, Path]:
-        run_dir = output_dir / slug
+        run_dir = (output_dir / slug).resolve()
         if cleanup and run_dir.exists():
             shutil.rmtree(run_dir)
 
@@ -1190,36 +1842,77 @@ class PipelineOrchestrator:
                 logger.error("💥  Failed to generate ElevenLabs music track during execution: %s", exc)
 
         provider = self.config.media_provider.lower()
+        media_assets: list[Path] = []
         if prompts_only:
             logger.info("🚧  Prompts-only mode: skipping media submission")
-            media_assets: list[Path] = []
         elif stitch_only:
             media_assets = self._collect_existing_assets(bundle, run_dirs["sora_dir"])
         else:
-            if provider == "sora":
-                real_sora = not dry_run
-                if real_sora and not getattr(self.media_client, "api_key", None):
-                    raise RuntimeError(
-                        f"Missing Sora API key. Set {self.config.sora_api_key_env} in your environment."
-                    )
-                submit_dry_run = not real_sora
-                logger.info("🎬  Submitting prompts to Sora (dry_run=%s)", submit_dry_run)
-                media_assets = self.media_client.submit_prompts(prompts.media_prompts, dry_run=submit_dry_run)
-            elif provider == "veo":
-                if dry_run:
-                    logger.info("🧪  Dry run: skipping Veo submission")
-                    media_assets = self.media_client.submit_prompts(prompts.media_prompts, dry_run=True)
-                else:
-                    has_key = bool(getattr(self.media_client, "api_key", None))
-                    uses_vertex = bool(getattr(self.media_client, "use_vertex", False))
-                    if not has_key and not uses_vertex:
+            pre_rendered: dict[str, Path] = {}
+            sora_queue: list[tuple[str, "MediaPrompt"]] = []
+
+            for prompt in prompts.media_prompts:
+                clip_id = prompt.chunk_id
+                chunk_ref = next(
+                    (c for c in bundle.chunks.chunks if getattr(c, "id", c.beat_id) == clip_id),
+                    None,
+                )
+                beat_id = chunk_ref.beat_id if chunk_ref else clip_id
+                beat = next((b for b in bundle.script.beats if b.id == beat_id), None)
+                visual_mode = self._resolve_visual_mode(beat)
+
+                clip_path: Path | None = None
+                if visual_mode == "chart":
+                    clip_path = self._render_chart_clip(bundle, beat, run_dirs, clip_id, prompt)
+                elif visual_mode in {"still_motion", "still"}:
+                    clip_path = self._render_still_clip(prompt, run_dirs, clip_id, beat)
+
+                if clip_path:
+                    logger.info("🖼️  Generated %s clip for %s at %s", visual_mode, clip_id, clip_path)
+                    pre_rendered[clip_id] = clip_path
+                    continue
+
+                sora_queue.append((clip_id, prompt))
+
+            if sora_queue:
+                queue_prompts = [item[1] for item in sora_queue]
+                if provider == "sora":
+                    real_sora = not dry_run
+                    if real_sora and not getattr(self.media_client, "api_key", None):
                         raise RuntimeError(
-                            f"Missing Veo API key. Set {self.config.veo_api_key_env} in your environment."
+                            f"Missing Sora API key. Set {self.config.sora_api_key_env} in your environment."
                         )
-                    logger.info("🎬  Submitting prompts to Veo model %s", self.config.veo_model)
-                    media_assets = self.media_client.submit_prompts(prompts.media_prompts, dry_run=False)
-            else:
-                raise ValueError(f"Unsupported media_provider '{self.config.media_provider}'")
+                    submit_dry_run = not real_sora
+                    logger.info(
+                        "🎬  Submitting %d prompts to Sora (dry_run=%s)",
+                        len(queue_prompts),
+                        submit_dry_run,
+                    )
+                    sora_assets = self.media_client.submit_prompts(queue_prompts, dry_run=submit_dry_run)
+                elif provider == "veo":
+                    if dry_run:
+                        logger.info("🧪  Dry run: skipping Veo submission for %d prompts", len(queue_prompts))
+                        sora_assets = self.media_client.submit_prompts(queue_prompts, dry_run=True)
+                    else:
+                        has_key = bool(getattr(self.media_client, "api_key", None))
+                        uses_vertex = bool(getattr(self.media_client, "use_vertex", False))
+                        if not has_key and not uses_vertex:
+                            raise RuntimeError(
+                                f"Missing Veo API key. Set {self.config.veo_api_key_env} in your environment."
+                            )
+                        logger.info("🎬  Submitting %d prompts to Veo model %s", len(queue_prompts), self.config.veo_model)
+                        sora_assets = self.media_client.submit_prompts(queue_prompts, dry_run=False)
+                else:
+                    raise ValueError(f"Unsupported media_provider '{self.config.media_provider}'")
+
+                for (clip_id, _), asset_path in zip(sora_queue, sora_assets, strict=True):
+                    pre_rendered.setdefault(clip_id, Path(asset_path))
+
+            for prompt in prompts.media_prompts:
+                clip_path = pre_rendered.get(prompt.chunk_id)
+                if not clip_path:
+                    raise RuntimeError(f"No asset generated for clip {prompt.chunk_id}")
+                media_assets.append(clip_path)
 
         # Build captions: prefer ASS karaoke when alignment is present
         caption_segments: list[CaptionSegment] = []

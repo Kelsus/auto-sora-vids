@@ -33,3 +33,7 @@ dev = [
 
 [project.scripts]
 aivideo = "aivideomaker.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["backend/cdk.out"]

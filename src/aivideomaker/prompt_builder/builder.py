@@ -96,6 +96,9 @@ class MediaPromptBuilder:
                 if self.default_voice
                 else None
             )
+            visual_type = self._resolve_visual_type(beat)
+            render_mode = self._render_mode(beat, visual_type)
+            visual_spec = beat.visual
             media_prompts.append(
                 MediaPrompt(
                     chunk_id=getattr(chunk, "id", chunk.beat_id),
@@ -105,6 +108,10 @@ class MediaPromptBuilder:
                     duration_sec=chunk.estimated_duration_sec,
                     negative_prompt=negative_prompt,
                     cameo_voice=voice_directive,
+                    visual_type=visual_type,
+                    render_mode=render_mode,
+                    chart_spec_id=getattr(visual_spec, "spec_id", None) if visual_spec else None,
+                    chart_variant=getattr(visual_spec, "chart_variant", None) if visual_spec else None,
                 )
             )
         return MediaPromptBundle(article_slug=article.article.metadata.slug, media_prompts=media_prompts)
@@ -238,6 +245,23 @@ class MediaPromptBuilder:
         else:
             negative_prompt = ", ".join(dict.fromkeys(current_negatives))
         return visual_prompt.strip(), negative_prompt
+
+    def _resolve_visual_type(self, beat: Beat) -> str:
+        visual_spec = beat.visual
+        if visual_spec and visual_spec.type:
+            return visual_spec.type.lower()
+        return "cinematic_broll"
+
+    def _render_mode(self, beat: Beat, visual_type: str) -> str:
+        visual_spec = beat.visual
+        if visual_type == "chart":
+            should_render_chart = True
+            if visual_spec and getattr(visual_spec, "chart_should_render", None) is not None:
+                should_render_chart = bool(visual_spec.chart_should_render)
+            return "chart_scene" if should_render_chart else "still_scene"
+        if visual_type == "still_motion":
+            return "still_scene"
+        return "sora_clip"
 
     # ------------------------------------------------------------------
     # Internal utilities

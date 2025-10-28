@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -10,6 +10,19 @@ class BeatVisualSpec(BaseModel):
     macro: Optional[str] = Field(default=None, description="Reference to a shot preset or macro")
     spec_id: Optional[str] = Field(default=None, description="Chart specification identifier when applicable")
     negations: List[str] = Field(default_factory=list, description="Negative prompt clauses")
+    chart_variant: Optional[str] = Field(default=None, description="LLM-suggested chart variant")
+    chart_reason: Optional[str] = Field(default=None, description="Narrative justification for the chart choice")
+    chart_data_available: Optional[bool] = Field(default=None, description="Whether sufficient labeled data is available to render the chart")
+    chart_should_render: Optional[bool] = Field(default=None, description="Whether the chart should be rendered after considering duplicates and clarity")
+    chart_duplicates_previous: Optional[bool] = Field(default=None, description="If true, this chart duplicates a prior beat's visualization")
+    chart_title: Optional[str] = Field(default=None, description="Display title for the chart")
+    chart_subtitle: Optional[str] = Field(default=None, description="Subtitle or supporting line for the chart")
+    chart_x_label: Optional[str] = Field(default=None, description="Label for the chart's X axis")
+    chart_y_label: Optional[str] = Field(default=None, description="Label for the chart's Y axis")
+    chart_note: Optional[str] = Field(default=None, description="Supplementary caption or footnote for the chart")
+    chart_series: Optional[List[dict[str, Any]]] = Field(default=None, description="Structured data points for chart rendering")
+    still_focus: Optional[str] = Field(default=None, description="Suggested focal subject for still-motion beats")
+    still_reason: Optional[str] = Field(default=None, description="Narrative justification for still-motion choice")
 
 
 class BeatQCRules(BaseModel):

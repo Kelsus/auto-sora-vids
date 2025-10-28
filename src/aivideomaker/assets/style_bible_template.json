@@ -75,6 +75,78 @@
         }
       },
       "style": "brandCharts/default"
+    },
+    "sample_bar": {
+      "library": "vega-lite",
+      "width": 1080,
+      "height": 1920,
+      "data": {
+        "values": [
+          {
+            "label": "Group A",
+            "value": 60
+          },
+          {
+            "label": "Group B",
+            "value": 45
+          },
+          {
+            "label": "Group C",
+            "value": 25
+          }
+        ],
+        "note": "Replace with comparative categories relevant to the beat"
+      },
+      "mark": "bar",
+      "encoding": {
+        "x": {
+          "field": "label",
+          "type": "nominal"
+        },
+        "y": {
+          "field": "value",
+          "type": "quantitative"
+        }
+      },
+      "style": "brandCharts/default"
+    },
+    "sample_line": {
+      "library": "vega-lite",
+      "width": 1080,
+      "height": 1920,
+      "data": {
+        "points": [
+          {
+            "label": "2019",
+            "value": 10
+          },
+          {
+            "label": "2020",
+            "value": 18
+          },
+          {
+            "label": "2021",
+            "value": 24
+          },
+          {
+            "label": "2022",
+            "value": 33
+          }
+        ],
+        "note": "Replace with trend data over time"
+      },
+      "mark": "line",
+      "encoding": {
+        "x": {
+          "field": "label",
+          "type": "temporal"
+        },
+        "y": {
+          "field": "value",
+          "type": "quantitative"
+        }
+      },
+      "style": "brandCharts/default"
     }
   },
   "qc_ruleset": {
