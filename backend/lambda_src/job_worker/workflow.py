@@ -84,6 +84,12 @@ class PipelineWorkflow:
 
     def render_clip(self, task: ClipTask) -> Dict[str, Any]:
         context = task.job_context
+        if context.pipeline_config.get("stop_before_sora") and not task.force_preprocess:
+            logger.info(
+                "Skipping core clip render for %s (pre-Sora run)",
+                task.clip_id,
+            )
+            return {"clipId": task.clip_id, "skipped": True, "reason": "pre_sora_only"}
         self._refresh_local_run_dir(context.job_id, context.output_prefix)
         bundle = self._bundle_store.load(context.bundle_key)
         run_dir = self._local_run_dir(context.job_id)
@@ -112,6 +118,22 @@ class PipelineWorkflow:
         self._refresh_local_run_dir(context.job_id, context.output_prefix)
         bundle = self._bundle_store.load(context.bundle_key)
         runner = self._get_runner(context.pipeline_config)
+
+        if context.pipeline_config.get("stop_before_sora"):
+            logger.info("Skipping final stitch for job %s (pre-Sora run)", context.job_id)
+            self._repository.update_status(
+                context.job_id,
+                JobStatusUpdate(
+                    status="READY_FOR_SORA",
+                    attributes={
+                        "output_bucket": self._settings.output_bucket,
+                        "output_prefix": context.output_prefix,
+                        "stage": "pre_sora_complete",
+                    },
+                ),
+            )
+            return {"finalVideoKey": None}
+
         result_bundle = runner.stitch_final(bundle, context.dry_run)
 
         run_dir = self._local_run_dir(context.job_id)

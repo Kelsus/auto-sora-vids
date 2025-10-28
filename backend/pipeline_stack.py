@@ -182,11 +182,9 @@ class VideoAutomationStack(Stack):
             secrets.choice(string.ascii_letters + string.digits)
             for _ in range(40)
         )
-        api_key_name = f"video-automation-{stage}-{self.node.addr[:8]}"
         api_key = apigateway.ApiKey(
             self,
             "VideoJobsApiKey",
-            api_key_name=api_key_name,
             description="API key required to call the video jobs ingest endpoint",
             enabled=True,
             value=api_key_value,
@@ -271,6 +269,7 @@ class VideoAutomationStack(Stack):
             "DATA_ROOT": "/tmp/data",
             "DEFAULT_DRY_RUN": "false",
             "FINAL_VIDEO_PREFIX": "jobs/final",
+            "PIPELINE_CONFIG_PATH": "/var/task/pipeline_config.serverless.json",
             "STAGE": stage,
         }
 
@@ -307,7 +306,7 @@ class VideoAutomationStack(Stack):
             )
             secret_parameters.append((env_var, secret_param, param_name))
 
-        worker_image_code = lambda_.DockerImageCode.from_image_asset(
+        image_asset_kwargs = dict(
             directory=str(project_root),
             file="backend/lambda_src/job_worker/Dockerfile",
             exclude=[
@@ -320,6 +319,9 @@ class VideoAutomationStack(Stack):
             ],
             platform=ecr_assets.Platform.LINUX_AMD64,
         )
+        worker_image_code = lambda_.DockerImageCode.from_image_asset(**image_asset_kwargs)
+        chart_image_code = lambda_.DockerImageCode.from_image_asset(cmd=["chart_worker.handler.handler"], **image_asset_kwargs)
+        still_image_code = lambda_.DockerImageCode.from_image_asset(cmd=["still_worker.handler.handler"], **image_asset_kwargs)
 
         worker_lambda = lambda_.DockerImageFunction(
             self,
@@ -334,6 +336,36 @@ class VideoAutomationStack(Stack):
         for env_var, parameter, name in secret_parameters:
             worker_lambda.add_environment(env_var, name)
             parameter.grant_read(worker_lambda)
+
+        chart_env = dict(worker_environment)
+        chart_lambda = lambda_.DockerImageFunction(
+            self,
+            "ChartAssetLambda",
+            code=chart_image_code,
+            timeout=Duration.minutes(4),
+            memory_size=2048,
+            environment=chart_env,
+        )
+        jobs_table.grant_read_write_data(chart_lambda)
+        output_bucket.grant_read_write(chart_lambda)
+
+        still_env = dict(worker_environment)
+        still_lambda = lambda_.DockerImageFunction(
+            self,
+            "StillAssetLambda",
+            code=still_image_code,
+            timeout=Duration.minutes(6),
+            memory_size=3072,
+            environment=still_env,
+        )
+        jobs_table.grant_read_write_data(still_lambda)
+        output_bucket.grant_read_write(still_lambda)
+
+        for env_var, parameter, name in secret_parameters:
+            chart_lambda.add_environment(env_var, name)
+            still_lambda.add_environment(env_var, name)
+            parameter.grant_read(chart_lambda)
+            parameter.grant_read(still_lambda)
 
         failure_handler = tasks.LambdaInvoke(
             self,
@@ -384,6 +416,46 @@ class VideoAutomationStack(Stack):
             },
             result_path=sfn.JsonPath.DISCARD,
         )
+        chart_clip_task = tasks.LambdaInvoke(
+            self,
+            "GenerateChartClip",
+            lambda_function=chart_lambda,
+            payload=sfn.TaskInput.from_object(
+                {
+                    "jobContext.$": "$.jobContext",
+                    "clipId.$": "$.clipId",
+                    "forcePreprocess": True,
+                }
+            ),
+            result_path=sfn.JsonPath.DISCARD,
+            payload_response_only=True,
+        )
+        chart_clip_task.add_retry(
+            errors=["States.Timeout"],
+            interval=Duration.seconds(60),
+            max_attempts=3,
+            backoff_rate=2.0,
+        )
+        still_clip_task = tasks.LambdaInvoke(
+            self,
+            "GenerateStillClip",
+            lambda_function=still_lambda,
+            payload=sfn.TaskInput.from_object(
+                {
+                    "jobContext.$": "$.jobContext",
+                    "clipId.$": "$.clipId",
+                    "forcePreprocess": True,
+                }
+            ),
+            result_path=sfn.JsonPath.DISCARD,
+            payload_response_only=True,
+        )
+        still_clip_task.add_retry(
+            errors=["States.Timeout"],
+            interval=Duration.seconds(60),
+            max_attempts=3,
+            backoff_rate=2.0,
+        )
         render_clip_task = tasks.LambdaInvoke(
             self,
             "RenderClip",
@@ -404,7 +476,9 @@ class VideoAutomationStack(Stack):
             max_attempts=3,
             backoff_rate=2.0,
         )
-        render_clips_map.iterator(render_clip_task)
+        processor_chain = sfn.Chain.start(chart_clip_task).next(still_clip_task).next(render_clip_task)
+
+        render_clips_map.iterator(processor_chain)
         render_clips_map.add_catch(failure_chain, result_path="$.error")
 
         stitch_task = tasks.LambdaInvoke(

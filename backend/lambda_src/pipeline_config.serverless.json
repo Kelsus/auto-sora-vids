@@ -1,0 +1,7 @@
+{
+  "require_human_approval": false,
+  "enable_openai_charts": true,
+  "veo_use_vertex": true,
+  "veo_project": "jcs-video-creator-project",
+  "veo_location": "us-central1"
+}

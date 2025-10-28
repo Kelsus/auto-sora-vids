@@ -1030,9 +1030,10 @@ class PipelineOrchestrator:
         visual_mode = self._resolve_visual_mode(beat)
 
         existing_clip = self._existing_clip_path(run_dirs, clip_id)
-        if existing_clip and visual_mode not in {"chart", "still_motion", "still"}:
+        if existing_clip:
             logger.info("♻️  Reusing existing clip for %s at %s", clip_id, existing_clip)
-            return ClipRenderResult(bundle=bundle, clip_id=clip_id, clip_asset=existing_clip)
+            updated_bundle = self._bundle_with_asset(bundle, clip_id, existing_clip, run_dirs)
+            return ClipRenderResult(bundle=updated_bundle, clip_id=clip_id, clip_asset=existing_clip)
 
         clip_path: Optional[Path] = None
 
@@ -1072,6 +1073,16 @@ class PipelineOrchestrator:
                 raise RuntimeError(f"Media client returned no assets for {clip_id}")
             clip_path = Path(media_assets[0])
 
+        updated_bundle = self._bundle_with_asset(bundle, clip_id, clip_path, run_dirs)
+        return ClipRenderResult(bundle=updated_bundle, clip_id=clip_id, clip_asset=clip_path)
+
+    def _bundle_with_asset(
+        self,
+        bundle: PipelineBundle,
+        clip_id: str,
+        clip_path: Path,
+        run_dirs: dict[str, Path],
+    ) -> PipelineBundle:
         try:
             stored_asset = clip_path.relative_to(run_dirs["run_dir"])
         except ValueError:
@@ -1080,8 +1091,7 @@ class PipelineOrchestrator:
         existing_assets = [Path(asset) for asset in bundle.sora_assets]
         filtered_assets = [asset for asset in existing_assets if asset.stem != clip_id]
         updated_assets = filtered_assets + [stored_asset]
-        updated_bundle = bundle.model_copy(update={"sora_assets": updated_assets})
-        return ClipRenderResult(bundle=updated_bundle, clip_id=clip_id, clip_asset=clip_path)
+        return bundle.model_copy(update={"sora_assets": updated_assets})
 
     def stitch_bundle(
         self,

@@ -48,6 +48,13 @@ Next steps
 - [x] Implement chart renderer for `visual.type == "chart"` using bundle `chart_specs` (e.g., Vega-Lite → MP4/PNG).
 - [ ] Add asset caching layer so repeated beats can reuse approved Sora clips or charts.
 
+### Serverless rollout
+- [x] Split chart rendering into its own Lambda (reads bundle, writes chart asset, retries on AI API/transient failures).
+- [x] Split still/Ken Burns generation into its own Lambda with retry support and shared asset storage.
+- [x] Extend Step Functions map to run `chart -> still -> sora` per clip with individual retry policies.
+- [x] Update job worker to skip inline chart/still generation when serverless helpers already produced assets.
+- [x] Ensure new Lambdas can pull secrets/credentials (Gemini, OpenAI) from SSM and have write access to run prefixes.
+
 ## 4. Automated visual QC
 - [ ] Add OCR-based check on Sora outputs; fail beats with unexpected text/numbers per beat QC rules.
 - [ ] Detect split/dual screens or frame flicker (<0.12 s) using simple frame differencing.

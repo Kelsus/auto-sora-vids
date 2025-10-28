@@ -23,7 +23,7 @@ import requests
 
 
 DEFAULT_STACK_NAME = "VideoAutomationStack-kelsus-dev"
-SUCCESS_STATUSES = {"SUCCEEDED", "COMPLETED"}
+SUCCESS_STATUSES = {"SUCCEEDED", "COMPLETED", "READY_FOR_SORA"}
 TERMINAL_STATUSES = SUCCESS_STATUSES | {"FAILED", "TIMED_OUT", "ABORTED"}
 
 
@@ -57,6 +57,11 @@ def parse_args() -> argparse.Namespace:
         "--skip-drive",
         action="store_true",
         help="Set deliver_final_exports=false so the Google Drive forwarder is bypassed.",
+    )
+    parser.add_argument(
+        "--pre-sora-only",
+        action="store_true",
+        help="Stop the state machine after chart/still generation (skip Sora render).",
     )
     parser.add_argument(
         "--metadata",
@@ -120,6 +125,8 @@ def main() -> None:
     pipeline_config = metadata.get("pipeline_config") or {}
     if args.skip_drive:
         pipeline_config["deliver_final_exports"] = False
+    if args.pre_sora_only:
+        pipeline_config["stop_before_sora"] = True
     if pipeline_config:
         metadata["pipeline_config"] = pipeline_config
 
