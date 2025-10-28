@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import sys
 from dataclasses import dataclass
 from typing import Optional
 from types import SimpleNamespace
@@ -16,6 +17,11 @@ try:  # pragma: no cover - dependency provided in Lambda runtime
     from googleapiclient.http import MediaIoBaseUpload
     from googleapiclient.errors import HttpError
 except ModuleNotFoundError:  # pragma: no cover - allows local tests without googleapiclient
+    logger = logging.getLogger(__name__)
+    logger.exception(
+        "googleapiclient import failed during module initialization; sys.path=%s",
+        sys.path,
+    )
     build = None
     MediaIoBaseUpload = None
 

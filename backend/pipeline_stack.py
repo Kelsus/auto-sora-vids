@@ -182,12 +182,15 @@ class VideoAutomationStack(Stack):
             secrets.choice(string.ascii_letters + string.digits)
             for _ in range(40)
         )
+        suffix = api_key_value[:8].lower()
+        api_key_name = f"video-automation-{stage}-{suffix}"
         api_key = apigateway.ApiKey(
             self,
             "VideoJobsApiKey",
             description="API key required to call the video jobs ingest endpoint",
             enabled=True,
             value=api_key_value,
+            api_key_name=api_key_name,
         )
         usage_plan = api.add_usage_plan(
             "VideoJobsUsagePlan",
@@ -385,11 +388,20 @@ class VideoAutomationStack(Stack):
         fail_state = sfn.Fail(self, "JobFailed")
         failure_chain = sfn.Chain.start(failure_handler).next(fail_state)
 
-        initialize_state = sfn.Pass(
+        initialize_state = tasks.LambdaInvoke(
             self,
             "InitializeState",
-            parameters={"job.$": "$"},
+            lambda_function=worker_lambda,
+            payload=sfn.TaskInput.from_object(
+                {
+                    "action": "MARK_RUNNING",
+                    "job.$": "$",
+                }
+            ),
+            result_path="$",
+            payload_response_only=True,
         )
+        initialize_state.add_catch(failure_chain, result_path="$.error")
 
         generate_prompts_task = tasks.LambdaInvoke(
             self,
@@ -496,7 +508,22 @@ class VideoAutomationStack(Stack):
         )
         stitch_task.add_catch(failure_chain, result_path="$.error")
 
-        workflow_definition = initialize_state.next(generate_prompts_task).next(render_clips_map).next(stitch_task)
+        generate_captions_task = tasks.LambdaInvoke(
+            self,
+            "GenerateCaptions",
+            lambda_function=worker_lambda,
+            payload=sfn.TaskInput.from_object(
+                {
+                    "action": "GENERATE_CAPTIONS",
+                    "jobContext.$": "$.jobContext",
+                }
+            ),
+            result_path="$.captionsResult",
+            payload_response_only=True,
+        )
+        generate_captions_task.add_catch(failure_chain, result_path="$.error")
+
+        workflow_definition = initialize_state.next(generate_prompts_task).next(render_clips_map).next(stitch_task).next(generate_captions_task)
         state_machine = sfn.StateMachine(
             self,
             "VideoJobStateMachine",
@@ -564,13 +591,15 @@ class VideoAutomationStack(Stack):
                 command=[
                     "bash",
                     "-c",
-                    "mkdir -p /asset-output && cp -r /asset-input/. /asset-output && pip install --no-cache-dir -r gdrive_forwarder/requirements.txt --target /asset-output --implementation cp --platform manylinux2014_x86_64 --python-version 3.11 --abi cp311 --only-binary=:all: && cp -r /project-src/aivideomaker /asset-output/aivideomaker",
-                ],
-                volumes=[
-                    DockerVolume(
-                        host_path=str(project_root / "src"),
-                        container_path="/project-src",
-                    )
+                    "mkdir -p /asset-output && "
+                    "cp -r /asset-input/. /asset-output && "
+                    "pip install --no-cache-dir -r gdrive_forwarder/requirements.txt "
+                    "--target /asset-output "
+                    "--implementation cp "
+                    "--platform manylinux2014_x86_64 "
+                    "--python-version 3.11 "
+                    "--abi cp311 "
+                    "--only-binary=:all:",
                 ],
             ),
         )

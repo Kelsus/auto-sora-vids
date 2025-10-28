@@ -50,6 +50,7 @@ def test_job_request_parsing_success():
     assert job.status == "PENDING"
     assert job.scheduled_datetime.tzinfo == timezone.utc
     assert job.job_type == "SCHEDULED"
+    assert job.job_id == "example-com-story"
 
 
 def test_job_request_accepts_pipeline_config_override():
@@ -124,12 +125,12 @@ def test_ingest_application_creates_job(monkeypatch):
 
     assert response["statusCode"] == 201
     body = json.loads(response["body"])
-    assert body["jobId"] == "https-example-com-story"
+    assert body["jobId"] == "example-com-story"
     assert store.records  # ensure save called
     record = store.records[0]
     assert record.url == payload["url"]
     assert record.scheduled_datetime.tzinfo == timezone.utc
-    assert record.job_id == "https-example-com-story"
+    assert record.job_id == "example-com-story"
     assert record.job_type == "SCHEDULED"
 
 
@@ -163,6 +164,30 @@ def test_ingest_stores_immediate_job(monkeypatch):
     assert record.job_type == "IMMEDIATE"
     assert record.scheduled_datetime.tzinfo == timezone.utc
     assert (datetime.now(timezone.utc) - record.scheduled_datetime).total_seconds() < 5
+    assert record.job_id == "example-com-story"
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://example.com/news/feature-story/", "example-com-feature-story"),
+        ("https://example.com/news/feature-story", "example-com-feature-story"),
+        ("https://example.com/news/2025/10/feature-story?utm_source=newsletter", "example-com-feature-story"),
+        ("https://example.com/path/to/INDEX.HTML", "example-com-index-html"),
+        ("https://example.com/path/to/", "example-com-to"),
+        ("https://example.com/", "example-com"),
+        ("https://example.com?ref=homepage", "example-com"),
+        ("https://sub.domain.co.uk/articles/latest-update/", "sub-domain-co-uk-latest-update"),
+        ("https://example.com/123/456/789/", "example-com-789"),
+    ],
+)
+def test_job_request_slug_generation(url: str, expected: str):
+    payload = {
+        "url": url,
+        "scheduled_datetime": "2024-08-12T18:00:00Z",
+    }
+    job = JobRequest.from_payload(payload)
+    assert job.job_id == expected
 
 
 

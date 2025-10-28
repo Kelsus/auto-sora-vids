@@ -243,6 +243,7 @@ class PipelineBundle(BaseModel):
     narration_alignment_payload: Optional[dict] = None
     music_track: Optional[Path] = None
     social_caption_path: Optional[Path] = None
+    captions_ass_path: Optional[Path] = None
     final_video: Optional[Path]
     script_greenlit: bool = True
     human_approval: Optional[bool] = None
@@ -2118,6 +2119,7 @@ class PipelineOrchestrator:
                 "narration_alignment_payload": narration_asset.alignment_payload if narration_asset else bundle.narration_alignment_payload,
                 "music_track": music_track,
                 "social_caption_path": caption_path or bundle.social_caption_path,
+                "captions_ass_path": captions_ass_path or bundle.captions_ass_path,
                 "final_video": final_video,
             }
         )
