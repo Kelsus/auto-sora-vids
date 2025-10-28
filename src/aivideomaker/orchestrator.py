@@ -15,6 +15,7 @@ from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field
 
 from aivideomaker.article_ingest.model import ArticleBundle, slugify
+from aivideomaker.chart_planner import ChartAssigner, ChartPlan, ChartPlanner, ChartIdea
 from aivideomaker.article_ingest.service import ArticleIngestor
 from aivideomaker.chunker.model import ChunkPlan
 from aivideomaker.chunker.planner import ChunkPlanner
@@ -178,6 +179,8 @@ class PipelineConfig(BaseModel):
     sora_request_timeout: float = 60.0
     sora_max_wait: float = 2400.0
     sora_submit_cooldown: float = 1.0
+    max_automatic_charts: int = 5
+    chart_analysis_excerpt_chars: int = 2600
     # Veo configuration
     veo_model: str = "veo-3.0-generate-001"
     veo_api_key_env: str = "GOOGLE_API_KEY"
@@ -247,6 +250,8 @@ class PipelineBundle(BaseModel):
     beats_meta_defaults: Optional[BeatsMetaDefaults] = None
     chart_specs: dict[str, ChartSpec] = Field(default_factory=dict)
     qc_ruleset: Optional[QualityControlRuleSet] = None
+    chart_plan: Optional[ChartPlan] = None
+    chart_assignments: dict[str, str] = Field(default_factory=dict, description="Mapping of beat ids to chart ids")
 
 
 class PromptGenerationResult(BaseModel):
@@ -277,6 +282,8 @@ class PipelineOrchestrator:
     chart_renderer: Optional[ChartRenderer] = None
     openai_chart_client: Optional[OpenAIChartClient] = None
     still_scene_prompter: Optional[StillScenePrompter] = None
+    chart_planner: Optional[ChartPlanner] = None
+    chart_assigner: Optional[ChartAssigner] = None
     _kenburns_index: int = 0
 
     _KENBURNS_PATTERNS: ClassVar[list[dict[str, Any]]] = [
@@ -445,6 +452,12 @@ class PipelineOrchestrator:
             if style_template and style_template.style_bible
             else None
         )
+        chart_planner = ChartPlanner(
+            llm=llm_client,
+            max_charts=config.max_automatic_charts,
+            excerpt_chars=config.chart_analysis_excerpt_chars,
+        )
+        chart_assigner = ChartAssigner()
         credentials_path = config.veo_credentials_path or os.getenv("GEMINI_KEY_FILE")
         still_client = StillImageClient(
             asset_dir=placeholder_root / "stills",
@@ -491,6 +504,8 @@ class PipelineOrchestrator:
             chart_renderer=chart_renderer,
             openai_chart_client=openai_chart_client,
             still_scene_prompter=StillScenePrompter(),
+            chart_planner=chart_planner,
+            chart_assigner=chart_assigner,
         )
         orchestrator._kenburns_index = 0
         return orchestrator
@@ -790,6 +805,91 @@ class PipelineOrchestrator:
             return spec_id
         return self._default_chart_spec_id()
 
+    def _build_dynamic_chart_specs(self, chart_plan: ChartPlan) -> dict[str, ChartSpec]:
+        specs: dict[str, ChartSpec] = {}
+        for chart in chart_plan.charts:
+            try:
+                specs[chart.id] = self._chart_spec_from_idea(chart)
+            except Exception as exc:  # pragma: no cover - guard against malformed chart data
+                logger.warning("Unable to build chart spec for %s: %s", chart.id, exc)
+        return specs
+
+    def _chart_spec_from_idea(self, chart: ChartIdea) -> ChartSpec:
+        values = [
+            {
+                "label": point.label,
+                "value": point.value,
+                "secondary_value": point.secondary_value,
+                "series": point.series,
+            }
+            for point in chart.data_points
+        ]
+        return ChartSpec(
+            library="aivideomaker.dynamic",
+            width=1080,
+            height=1920,
+            data={
+                "values": values,
+                "note": chart.note or chart.summary,
+                "source": chart.source,
+            },
+            mark=self._chart_mark_from_variant(chart.variant),
+            encoding={},
+            style=None,
+        )
+
+    def _chart_mark_from_variant(self, variant: str | None) -> str:
+        if not variant:
+            return "bar"
+        normalized = variant.lower()
+        if normalized in {"bar", "column"}:
+            return "bar"
+        if normalized in {"line", "trend"}:
+            return "line"
+        if normalized in {"pie", "donut", "arc"}:
+            return "donut"
+        if normalized in {"area"}:
+            return "area"
+        return normalized
+
+    def _downgrade_unassigned_chart_beats(
+        self,
+        script: ScriptPlan,
+        assignments: dict[str, str],
+    ) -> ScriptPlan:
+        updated_beats: list[Beat] = []
+        assigned_ids = set(assignments.keys())
+        for beat in script.beats:
+            visual = beat.visual
+            vtype = (visual.type or "") if visual else ""
+            if beat.id in assigned_ids:
+                updated_beats.append(beat)
+                continue
+
+            if not visual:
+                updated_beats.append(beat)
+                continue
+
+            fallback = visual.model_copy(
+                update={
+                    "type": "cinematic_broll",
+                    "spec_id": None,
+                    "chart_variant": None,
+                    "chart_reason": None,
+                    "chart_data_available": None,
+                    "chart_should_render": None,
+                    "chart_duplicates_previous": None,
+                    "chart_title": None,
+                    "chart_subtitle": None,
+                    "chart_x_label": None,
+                    "chart_y_label": None,
+                    "chart_note": None,
+                    "chart_series": None,
+                }
+            )
+            updated_beats.append(beat.model_copy(update={"visual": fallback}))
+        return script.model_copy(update={"beats": updated_beats})
+
     def _build_initial_bundle(
         self,
         article_url: str,
@@ -805,6 +905,20 @@ class PipelineOrchestrator:
         filename_base = article.slug
         article_title = article.article.metadata.title
 
+        chart_plan: ChartPlan | None = None
+        chart_outline: str | None = None
+        if self.chart_planner:
+            try:
+                chart_plan = self.chart_planner.analyze_article(article)
+                if chart_plan and not chart_plan.is_empty():
+                    chart_outline = "\n".join(chart_plan.summary_lines())
+            except Exception as exc:  # pragma: no cover - defensive around LLM calls
+                logger.warning("Chart analysis failed; continuing without pre-selected charts: %s", exc)
+                chart_plan = ChartPlan(charts=[])
+
+        if chart_plan is None:
+            chart_plan = ChartPlan(charts=[])
+
         review_decision: ScriptReviewDecision | None = None
         pending_review_feedback: ScriptReviewDecision | None = None
         previous_script_attempt: ScriptPlan | None = None
@@ -816,6 +930,7 @@ class PipelineOrchestrator:
                 article,
                 review=pending_review_feedback,
                 previous_script=previous_script_attempt if pending_review_feedback else None,
+                chart_outline=chart_outline,
             )
 
             review_decision = None
@@ -857,6 +972,18 @@ class PipelineOrchestrator:
             if self.style_template:
                 script = self._apply_style_template(script)
             break
+
+        chart_assignments: dict[str, str] = {}
+        if self.chart_assigner and chart_plan and not chart_plan.is_empty():
+            try:
+                script, assignments = self.chart_assigner.assign(chart_plan, script)
+                chart_assignments = {assignment.beat_id: assignment.chart_id for assignment in assignments}
+            except Exception as exc:  # pragma: no cover - defensive safeguard
+                logger.warning("Failed to assign charts to beats: %s", exc)
+                chart_assignments = {}
+
+        if chart_assignments:
+            script = self._downgrade_unassigned_chart_beats(script, chart_assignments)
 
         narration_asset: NarrationAsset | None = None
         alignment_payload: dict | None = None
@@ -918,6 +1045,10 @@ class PipelineOrchestrator:
             if self.style_template and self.style_template.chart_specs
             else {}
         )
+        if chart_plan and chart_plan.charts:
+            dynamic_specs = self._build_dynamic_chart_specs(chart_plan)
+            for key, spec in dynamic_specs.items():
+                chart_specs.setdefault(key, spec)
         qc_ruleset = (
             self.style_template.qc_ruleset.model_copy()
             if self.style_template and self.style_template.qc_ruleset
@@ -944,6 +1075,8 @@ class PipelineOrchestrator:
             beats_meta_defaults=beats_meta_defaults,
             chart_specs=chart_specs,
             qc_ruleset=qc_ruleset,
+            chart_plan=chart_plan,
+            chart_assignments=chart_assignments,
         )
 
     def run(

@@ -42,9 +42,28 @@ class PipelineWorkflow:
 
     def generate_prompts(self, metadata: JobMetadata, dry_run: bool | None = None) -> JobContext:
         dry_run_value = self._resolve_dry_run(dry_run)
-        runner = self._get_runner(metadata.pipeline_config)
-        prompts_result = runner.run_prompts(metadata.article_url, dry_run=dry_run_value)
-        bundle = prompts_result.bundle
+        pipeline_overrides = metadata.pipeline_config or {}
+        resume_key = pipeline_overrides.get("resume_from_bundle")
+
+        bundle_key_override: str | None = None
+        if isinstance(resume_key, str) and resume_key.strip() and resume_key.lower() not in {"true", "false"}:
+            bundle_key_override = resume_key.strip()
+
+        if resume_key:
+            target_bundle_key = bundle_key_override or self._settings.bundle_key(metadata.job_id)
+            bundle = self._bundle_store.load(target_bundle_key)
+            clip_ids = [
+                prompt.chunk_id
+                for prompt in bundle.prompts.media_prompts
+                if getattr(prompt, "render_mode", "") == "sora_clip"
+            ]
+            if not clip_ids:
+                clip_ids = [prompt.chunk_id for prompt in bundle.prompts.media_prompts]
+        else:
+            runner = self._get_runner(pipeline_overrides)
+            prompts_result = runner.run_prompts(metadata.article_url, dry_run=dry_run_value)
+            bundle = prompts_result.bundle
+            clip_ids = prompts_result.clip_ids
         job_id = metadata.job_id
         if job_id != bundle.article.slug:
             logger.warning("Job id %s differs from bundle slug %s; using bundle slug", job_id, bundle.article.slug)
@@ -52,13 +71,13 @@ class PipelineWorkflow:
 
         run_dir = self._local_run_dir(job_id)
         bundle_key = self._settings.bundle_key(job_id)
+        if bundle_key_override:
+            bundle_key = bundle_key_override
         output_prefix = self._settings.run_prefix(job_id)
 
         self._write_bundle(run_dir, bundle)
         self._bundle_store.save(bundle_key, bundle)
         self._storage.upload_directory(run_dir, output_prefix)
-
-        clip_ids = prompts_result.clip_ids
 
         update = JobStatusUpdate(
             status="RUNNING",
@@ -84,6 +103,12 @@ class PipelineWorkflow:
 
     def render_clip(self, task: ClipTask) -> Dict[str, Any]:
         context = task.job_context
+        if context.pipeline_config.get("resume_from_bundle") and task.force_preprocess:
+            logger.info(
+                "Resume mode: skipping preprocessing task for %s",
+                task.clip_id,
+            )
+            return {"clipId": task.clip_id, "skipped": True, "reason": "resume_preexisting"}
         if context.pipeline_config.get("stop_before_sora") and not task.force_preprocess:
             logger.info(
                 "Skipping core clip render for %s (pre-Sora run)",
