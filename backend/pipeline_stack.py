@@ -441,6 +441,7 @@ class VideoAutomationStack(Stack):
             ),
             result_path=sfn.JsonPath.DISCARD,
             payload_response_only=True,
+            timeout=Duration.minutes(10),
         )
         chart_clip_task.add_retry(
             errors=["States.Timeout"],
@@ -461,6 +462,7 @@ class VideoAutomationStack(Stack):
             ),
             result_path=sfn.JsonPath.DISCARD,
             payload_response_only=True,
+            timeout=Duration.minutes(10),
         )
         still_clip_task.add_retry(
             errors=["States.Timeout"],
@@ -481,6 +483,7 @@ class VideoAutomationStack(Stack):
             ),
             result_path=sfn.JsonPath.DISCARD,
             payload_response_only=True,
+            timeout=Duration.minutes(15),
         )
         render_clip_task.add_retry(
             errors=["States.Timeout"],
@@ -505,6 +508,7 @@ class VideoAutomationStack(Stack):
             ),
             result_path="$.stitchResult",
             payload_response_only=True,
+            timeout=Duration.minutes(15),
         )
         stitch_task.add_catch(failure_chain, result_path="$.error")
 
@@ -520,6 +524,7 @@ class VideoAutomationStack(Stack):
             ),
             result_path="$.captionsResult",
             payload_response_only=True,
+            timeout=Duration.minutes(15),
         )
         generate_captions_task.add_catch(failure_chain, result_path="$.error")
 
