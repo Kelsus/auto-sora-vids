@@ -108,12 +108,12 @@ def build_karaoke_ass(
     outline: int = 3,
     alignment_code: int = 5,  # 5: centered vertically/horizontally
     line_position_ratio: float = 0.58,
-    max_chars_per_line: int = 36,
+    max_chars_per_line: int = 32,
     max_line_duration: float = 3.0,
 ) -> str:
     # Header and styles (Primary white, Secondary yellow for karaoke fill, Outline black)
     res_x, res_y = play_res
-    horizontal_margin = 5
+    horizontal_margin = max(24, outline * 6)
     header = [
         "[Script Info]",
         "ScriptType: v4.00+",
