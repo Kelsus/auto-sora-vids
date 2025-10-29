@@ -1891,6 +1891,13 @@ class PipelineOrchestrator:
         h = total_minutes // 60
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
+    @staticmethod
+    def _try_rel_path(path: Path, base: Path) -> Path | None:
+        try:
+            return path.relative_to(base)
+        except ValueError:
+            return None
+
     def _collect_existing_assets(self, bundle: PipelineBundle, sora_dir: Path) -> list[Path]:
         assets: list[Path] = []
         for prompt in bundle.prompts.media_prompts:
@@ -2109,6 +2116,22 @@ class PipelineOrchestrator:
             reason = "prompts-only mode" if prompts_only else "dry run or no assets"
             logger.info("⏭️  Skipping stitching (%s)", reason)
 
+        final_video_path: Path | None = None
+        if final_video:
+            candidate = Path(final_video)
+            if candidate.is_absolute():
+                final_video_path = self._try_rel_path(candidate, run_dirs["run_dir"]) or candidate
+            else:
+                final_video_path = candidate
+
+        captions_ass_store: Path | None = None
+        if captions_ass_path:
+            candidate = Path(captions_ass_path)
+            if candidate.is_absolute():
+                captions_ass_store = self._try_rel_path(candidate, run_dirs["run_dir"]) or candidate
+            else:
+                captions_ass_store = candidate
+
         output_dir.mkdir(parents=True, exist_ok=True)
         return bundle.model_copy(
             update={
@@ -2119,7 +2142,7 @@ class PipelineOrchestrator:
                 "narration_alignment_payload": narration_asset.alignment_payload if narration_asset else bundle.narration_alignment_payload,
                 "music_track": music_track,
                 "social_caption_path": caption_path or bundle.social_caption_path,
-                "captions_ass_path": captions_ass_path or bundle.captions_ass_path,
-                "final_video": final_video,
+                "captions_ass_path": captions_ass_store or bundle.captions_ass_path,
+                "final_video": final_video_path or final_video,
             }
         )

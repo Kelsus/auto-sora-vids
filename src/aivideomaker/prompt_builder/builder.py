@@ -85,20 +85,28 @@ class MediaPromptBuilder:
     def build(self, article: ArticleBundle, script: ScriptPlan, chunks: ChunkPlan) -> MediaPromptBundle:
         beat_map = {beat.id: beat for beat in script.beats}
         media_prompts = []
-        for chunk in chunks.chunks:
+        for index, chunk in enumerate(chunks.chunks):
             beat = beat_map[chunk.beat_id]
-            visual_prompt = self._visual_prompt(article, beat, chunk.estimated_duration_sec)
+            force_sora = index == 0
+
+            beat_for_prompt = beat
+            if force_sora:
+                beat_for_prompt = beat.model_copy(update={"visual": BeatVisualSpec(type="cinematic_broll")})
+
+            visual_prompt = self._visual_prompt(article, beat_for_prompt, chunk.estimated_duration_sec)
             negative_prompt = self._negative_prompt(beat)
             audio_prompt = self._audio_prompt(beat)
-            visual_prompt, negative_prompt = self._lint_prompt(beat, visual_prompt, negative_prompt)
+            visual_prompt, negative_prompt = self._lint_prompt(beat_for_prompt, visual_prompt, negative_prompt)
             voice_directive = (
                 VoiceDirective(voice_id=self.default_voice)
                 if self.default_voice
                 else None
             )
-            visual_type = self._resolve_visual_type(beat)
-            render_mode = self._render_mode(beat, visual_type)
-            visual_spec = beat.visual
+            visual_type = self._resolve_visual_type(beat_for_prompt)
+            render_mode = self._render_mode(beat_for_prompt, visual_type)
+            if force_sora:
+                render_mode = "sora_clip"
+            visual_spec = beat_for_prompt.visual
             media_prompts.append(
                 MediaPrompt(
                     chunk_id=getattr(chunk, "id", chunk.beat_id),
@@ -110,8 +118,8 @@ class MediaPromptBuilder:
                     cameo_voice=voice_directive,
                     visual_type=visual_type,
                     render_mode=render_mode,
-                    chart_spec_id=getattr(visual_spec, "spec_id", None) if visual_spec else None,
-                    chart_variant=getattr(visual_spec, "chart_variant", None) if visual_spec else None,
+                    chart_spec_id=(getattr(visual_spec, "spec_id", None) if visual_spec and not force_sora else None),
+                    chart_variant=(getattr(visual_spec, "chart_variant", None) if visual_spec and not force_sora else None),
                 )
             )
         return MediaPromptBundle(article_slug=article.article.metadata.slug, media_prompts=media_prompts)

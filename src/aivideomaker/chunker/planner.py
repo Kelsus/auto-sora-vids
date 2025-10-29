@@ -45,8 +45,7 @@ class ChunkPlanner:
             if not beat_words:
                 continue
             duration = beat_words[-1].end - beat_words[0].start
-            is_chart = bool(getattr(beat.visual, "type", "").lower() == "chart")
-            if duration <= ALLOWED_DURATIONS[-1] or is_chart:
+            if duration <= ALLOWED_DURATIONS[-1]:
                 chunk_id = beat.id
                 text = beat.transcript.strip()
                 target_duration = self._select_duration(duration)

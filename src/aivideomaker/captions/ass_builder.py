@@ -113,6 +113,7 @@ def build_karaoke_ass(
 ) -> str:
     # Header and styles (Primary white, Secondary yellow for karaoke fill, Outline black)
     res_x, res_y = play_res
+    horizontal_margin = 5
     header = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -122,7 +123,7 @@ def build_karaoke_ass(
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: {style_name}, {font}, {font_size}, &H00FFFFFF, &H0000FFFF, &H00000000, &H64000000, 0,0,0,0, 100,100, 0, 0, 1, {outline}, 0, {alignment_code}, 40,40,60, 1",
+        f"Style: {style_name}, {font}, {font_size}, &H00FFFFFF, &H0000FFFF, &H00000000, &H64000000, 0,0,0,0, 100,100, 0, 0, 1, {outline}, 0, {alignment_code}, {horizontal_margin}, {horizontal_margin}, 60, 1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -135,7 +136,11 @@ def build_karaoke_ass(
     events: list[str] = []
     res_x, res_y = play_res
     line_y = int(res_y * line_position_ratio)
-    position_prefix = f"{{\\pos({res_x // 2},{line_y})\\q2\\1c&HFFFFFF&}}"
+    clip_left = horizontal_margin
+    clip_right = res_x - horizontal_margin
+    position_prefix = (
+        f"{{\\clip({clip_left},0,{clip_right},{res_y})\\pos({res_x // 2},{line_y})\\q2\\1c&HFFFFFF&}}"
+    )
 
     def append_event(word_slice: list[WordTiming]) -> None:
         if not word_slice:

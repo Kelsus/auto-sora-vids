@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 
 from moviepy.audio.fx import all as afx
 from moviepy.editor import (
@@ -53,21 +54,54 @@ class Stitcher:
         clips = [VideoFileClip(str(path)) for path in video_paths]
         if not clips:
             raise ValueError("No clips supplied for stitching")
-        final = concatenate_videoclips(clips, method="compose")
+        # Ensure all clips share a common frame size so we don't introduce padding.
+        clip_sizes: Counter[Tuple[int, int]] = Counter(
+            (int(clip.w), int(clip.h)) for clip in clips
+        )
+
+        target_size: Tuple[int, int]
+        # Pick the most common resolution; this avoids shrinking dominant clips if
+        # isolated assets (e.g., charts/stills) differ slightly.
+        target_size = max(clip_sizes.items(), key=lambda item: (item[1], item[0]))[0]
+        needs_normalization = len(clip_sizes) > 1
+
+        resized_wrappers: list = []
+        concat_clips = clips if not needs_normalization else []
+
+        if needs_normalization:
+            logger.info(
+                "Normalizing clip resolutions for stitching: target=%sx%s, variants=%s",
+                target_size[0],
+                target_size[1],
+                sorted({f"{w}x{h}" for (w, h) in clip_sizes}),
+            )
+            for clip in clips:
+                clip_size = (int(clip.w), int(clip.h))
+                if clip_size == target_size:
+                    concat_clips.append(clip)
+                    continue
+                resized = clip.resize(newsize=target_size)
+                concat_clips.append(resized)
+                resized_wrappers.append(resized)
+
+        final = concatenate_videoclips(concat_clips, method="compose")
 
         audio_clips = []
         voice_clip = None
         music_clip = None
-        target_duration = final.duration
+        video_duration = final.duration
+        target_duration = video_duration
+        duration_tolerance = 0.05
 
         if voice_track:
             voice_clip = AudioFileClip(str(voice_track)).volumex(voice_volume)
+            voice_duration = voice_clip.duration
             audio_clips.append(voice_clip)
-            target_duration = voice_clip.duration
+            target_duration = max(target_duration, voice_duration)
 
         if music_track:
             music_clip = AudioFileClip(str(music_track)).volumex(music_volume)
-            loop_target = target_duration if voice_track else final.duration
+            loop_target = target_duration
             music_clip = afx.audio_loop(music_clip, duration=loop_target)
             audio_clips.append(music_clip)
 
@@ -77,8 +111,13 @@ class Stitcher:
         else:
             composite = None
 
-        if voice_track:
-            final = final.subclip(0, target_duration)
+        if target_duration > video_duration + duration_tolerance:
+            logger.info(
+                "Extending final video from %.2fs to %.2fs to align with narration",
+                video_duration,
+                target_duration,
+            )
+            final = final.set_duration(target_duration)
 
         if level_audio:
             logger.info("Audio leveling placeholder; integrate ffmpeg filters here")
@@ -146,6 +185,8 @@ class Stitcher:
                 temp_audiofile=str(output_path.with_suffix('.temp-audio.m4a')),
                 remove_temp=True,
             )
+        for wrapper in resized_wrappers:
+            wrapper.close()
         for clip in clips:
             clip.close()
         if voice_track:
