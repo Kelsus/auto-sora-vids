@@ -15,6 +15,16 @@ def handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:  # pragma: 
     task = ClipTask.from_payload(event)
 
     bundle = workflow._bundle_store.load(task.job_context.bundle_key)
+    
+    # Check render_mode from prompt FIRST (overrides beat visual type)
+    prompt = next((p for p in bundle.prompts.media_prompts if p.chunk_id == task.clip_id), None)
+    if prompt and getattr(prompt, "render_mode", None) == "sora_clip":
+        logger.debug(
+            "Skipping still generation for %s; render_mode=sora_clip (forced Sora)",
+            task.clip_id,
+        )
+        return {"clipId": task.clip_id, "skipped": True, "reason": "forced_sora"}
+    
     visual_type = _resolve_visual_type(bundle, task.clip_id)
     if visual_type not in {"still_motion", "still"}:
         logger.debug(

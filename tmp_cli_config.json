@@ -1,7 +1,10 @@
 {
   "enable_script_review": false,
   "require_human_approval": false,
-  "media_provider": "veo",
-  "veo_model": "veo-3.1-generate-preview",
-  "veo_max_wait": 2400.0
+  "enable_openai_charts": true,
+  "openai_chart_model": "gpt-5",
+  "veo_project": "jcs-video-creator-project",
+  "veo_location": "us-central1",
+  "veo_use_vertex": true,
+  "veo_credentials_path": "veo-service-account.json"
 }

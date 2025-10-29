@@ -1161,7 +1161,6 @@ class PipelineOrchestrator:
         )
         beat_id = chunk_ref.beat_id if chunk_ref else clip_id
         beat = next((b for b in bundle.script.beats if b.id == beat_id), None)
-        visual_mode = self._resolve_visual_mode(beat)
 
         existing_clip = self._existing_clip_path(run_dirs, clip_id)
         if existing_clip:
@@ -1170,11 +1169,20 @@ class PipelineOrchestrator:
             return ClipRenderResult(bundle=updated_bundle, clip_id=clip_id, clip_asset=existing_clip)
 
         clip_path: Optional[Path] = None
-
-        if visual_mode == "chart":
-            clip_path = self._render_chart_clip(bundle, beat, run_dirs, clip_id, prompt)
-        if clip_path is None and visual_mode in {"still_motion", "still"}:
-            clip_path = self._render_still_clip(prompt, run_dirs, clip_id, beat)
+        
+        # Check render_mode from prompt FIRST (overrides beat visual type)
+        # This ensures first chunk is always Sora even if beat says "still_motion" or "chart"
+        if prompt.render_mode == "sora_clip":
+            logger.debug("Clip %s has render_mode=sora_clip, forcing Sora generation", clip_id)
+            # Skip chart/still generation, go straight to Sora/Veo
+        else:
+            # Otherwise, check beat's visual type for chart/still
+            visual_mode = self._resolve_visual_mode(beat)
+            
+            if visual_mode == "chart":
+                clip_path = self._render_chart_clip(bundle, beat, run_dirs, clip_id, prompt)
+            if clip_path is None and visual_mode in {"still_motion", "still"}:
+                clip_path = self._render_still_clip(prompt, run_dirs, clip_id, beat)
 
         provider = self.config.media_provider.lower()
         if clip_path is None:
@@ -2010,19 +2018,32 @@ class PipelineOrchestrator:
                 )
                 beat_id = chunk_ref.beat_id if chunk_ref else clip_id
                 beat = next((b for b in bundle.script.beats if b.id == beat_id), None)
+                
+                # Check render_mode from prompt FIRST (this overrides beat visual type)
+                # This ensures first chunk is always Sora even if beat says "still_motion"
+                if prompt.render_mode == "sora_clip":
+                    logger.debug("Clip %s has render_mode=sora_clip, forcing Sora generation", clip_id)
+                    sora_queue.append((clip_id, prompt))
+                    continue
+                
+                # Otherwise, use beat's visual type
                 visual_mode = self._resolve_visual_mode(beat)
 
                 clip_path: Path | None = None
                 if visual_mode == "chart":
                     clip_path = self._render_chart_clip(bundle, beat, run_dirs, clip_id, prompt)
+                    if clip_path:
+                        logger.info("📊  Generated chart clip for %s at %s", clip_id, clip_path)
+                        pre_rendered[clip_id] = clip_path
+                        continue
                 elif visual_mode in {"still_motion", "still"}:
                     clip_path = self._render_still_clip(prompt, run_dirs, clip_id, beat)
+                    if clip_path:
+                        logger.info("🖼️  Generated still clip for %s at %s", clip_id, clip_path)
+                        pre_rendered[clip_id] = clip_path
+                        continue
 
-                if clip_path:
-                    logger.info("🖼️  Generated %s clip for %s at %s", visual_mode, clip_id, clip_path)
-                    pre_rendered[clip_id] = clip_path
-                    continue
-
+                # Only reach here if no chart/still was generated - add to Sora queue
                 sora_queue.append((clip_id, prompt))
 
             if sora_queue:
