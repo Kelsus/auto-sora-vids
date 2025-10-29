@@ -34,6 +34,7 @@ class SoraClient:
         request_timeout: float = 30.0,
         max_wait: float = 600.0,
         submit_cooldown: float = 1.0,
+        download_max_attempts: int = 5,
     ) -> None:
         self._asset_dir = Path(asset_dir) if asset_dir is not None else None
         self.api_key = api_key
@@ -45,6 +46,7 @@ class SoraClient:
         self.base_url = "https://api.openai.com/v1"
         self.submit_cooldown = max(0.0, submit_cooldown)
         self._last_submit_at = 0.0
+        self.download_max_attempts = max(1, int(download_max_attempts))
 
     @property
     def asset_dir(self) -> Path:
@@ -318,19 +320,49 @@ class SoraClient:
             time.sleep(self.poll_interval)
 
     def _download_video(self, job_id: str, target: Path) -> None:
-        response = requests.get(
-            f"{self.base_url}/videos/{job_id}/content",
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            stream=True,
-            timeout=self.request_timeout,
-            params={"variant": "video"},
-        )
-        response.raise_for_status()
-        self._respect_rate_limits(response.headers)
-        with target.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=8192):
-                handle.write(chunk)
-        logger.info("Saved Sora video to %s", target)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                response = requests.get(
+                    f"{self.base_url}/videos/{job_id}/content",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    stream=True,
+                    timeout=self.request_timeout,
+                    params={"variant": "video"},
+                )
+                response.raise_for_status()
+                self._respect_rate_limits(response.headers)
+                with target.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        handle.write(chunk)
+                logger.info("Saved Sora video to %s", target)
+                return
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if attempt < self.download_max_attempts and status and status >= 500:
+                    delay = min(30.0, 2 ** attempt + random.uniform(0, 0.5))
+                    logger.warning(
+                        "Sora download for %s failed with %s; retrying in %.1fs",
+                        job_id,
+                        status,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
+            except (requests.ConnectionError, requests.Timeout) as exc:  # pragma: no cover - network path
+                if attempt < self.download_max_attempts:
+                    delay = min(30.0, 2 ** attempt + random.uniform(0, 0.5))
+                    logger.warning(
+                        "Sora download for %s encountered %s; retrying in %.1fs",
+                        job_id,
+                        exc.__class__.__name__,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
 
     def _respect_submit_cooldown(self) -> None:
         if self.submit_cooldown <= 0.0:
