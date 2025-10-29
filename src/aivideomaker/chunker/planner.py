@@ -209,7 +209,8 @@ class ChunkPlanner:
     def _plan_without_alignment(self, script: ScriptPlan) -> ChunkPlan:
         chunks: list[Chunk] = []
         for beat in script.beats:
-            transcripts = self._split_transcript(beat.transcript)
+            is_chart = bool(getattr(beat.visual, "type", "").lower() == "chart")
+            transcripts = [beat.transcript.strip()] if is_chart else self._split_transcript(beat.transcript)
             for index, segment in enumerate(transcripts, start=1):
                 chunk_id = beat.id if len(transcripts) == 1 else f"{beat.id}-{index}"
                 duration = len(segment.split()) / 2.5

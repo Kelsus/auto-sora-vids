@@ -52,6 +52,8 @@ SCRIPT_PLANNING_PROMPT = dedent(
     warning signs the reporting surfaces. If the piece spotlights investments that will pay off over specific
     horizons, work those timeframes into the narration.
 
+{chart_brief_block}
+
     Article metadata:
     - Title: {title}
     - Byline: {byline}
@@ -130,10 +132,14 @@ def render_planning_prompt(
     excerpt_chars: int = 1800,
     review: "ScriptReviewDecision | None" = None,
     previous_script: ScriptPlan | None = None,
+    chart_outline: str | None = None,
 ) -> str:
     article = bundle.article
     excerpt = article.text[:excerpt_chars]
     revision_context_block = _build_revision_context_block(review, previous_script)
+    chart_brief_block = ""
+    if chart_outline:
+        chart_brief_block = "Recommended charts (use each at most once, only when the beat’s narration references the same data):\n" + indent(chart_outline, "    ") + "\n"
     return SCRIPT_PLANNING_PROMPT.format(
         title=article.metadata.title,
         byline=article.metadata.byline or "Unknown",
@@ -141,6 +147,7 @@ def render_planning_prompt(
         published=article.metadata.published_at or "Unknown",
         excerpt=excerpt,
         revision_context_block=revision_context_block,
+        chart_brief_block=chart_brief_block,
     )
 
 

@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
+try:
+    from PIL import ImageFont
+except ImportError:
+    ImageFont = None  # type: ignore[assignment]
+
 from aivideomaker.chunker.model import ChunkPlan
 from aivideomaker.script_engine.model import ScriptPlan
 
@@ -96,6 +101,57 @@ def _consume_words_for_text(word_iter: Iterator[WordTiming], text: str) -> Itera
             return
 
 
+def _estimate_text_width(text: str, font_name: str, font_size: int, outline: int) -> float:
+    """
+    Estimate the pixel width of text using PIL's ImageFont.
+    Falls back to character-based estimation if PIL is unavailable.
+    
+    Args:
+        text: The text to measure
+        font_name: Font family name
+        font_size: Font size in points
+        outline: Outline width in pixels
+        
+    Returns:
+        Estimated width in pixels
+    """
+    if ImageFont is None:
+        # Fallback: rough estimate based on average character width
+        # For proportional fonts at 48pt, average char width is ~28-32 pixels
+        avg_char_width = font_size * 0.6
+        return len(text) * avg_char_width + (outline * 2)
+    
+    try:
+        # Try to load the actual font
+        font = None
+        for font_path in [
+            f"{font_name}.ttf",
+            f"/System/Library/Fonts/{font_name}.ttc",  # macOS
+            f"/usr/share/fonts/truetype/{font_name.lower()}/{font_name}.ttf",  # Linux
+            "DejaVuSans.ttf",  # Common fallback
+        ]:
+            try:
+                font = ImageFont.truetype(font_path, size=font_size)
+                break
+            except (OSError, IOError):
+                continue
+        
+        if font:
+            # Use PIL's getbbox to measure text width
+            # getbbox returns (left, top, right, bottom)
+            bbox = font.getbbox(text)
+            text_width = bbox[2] - bbox[0]
+            # Add outline width (outline appears on both sides)
+            return text_width + (outline * 2)
+    except Exception:
+        pass
+    
+    # Final fallback: conservative character-based estimate
+    # Assume wider characters for safety
+    avg_char_width = font_size * 0.65
+    return len(text) * avg_char_width + (outline * 2)
+
+
 def build_karaoke_ass(
     *,
     script: ScriptPlan,
@@ -108,11 +164,12 @@ def build_karaoke_ass(
     outline: int = 3,
     alignment_code: int = 5,  # 5: centered vertically/horizontally
     line_position_ratio: float = 0.58,
-    max_chars_per_line: int = 36,
+    max_chars_per_line: int = 28,  # Reduced from 32 to be more conservative
     max_line_duration: float = 3.0,
 ) -> str:
     # Header and styles (Primary white, Secondary yellow for karaoke fill, Outline black)
     res_x, res_y = play_res
+    horizontal_margin = max(24, outline * 6)
     header = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -122,7 +179,7 @@ def build_karaoke_ass(
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: {style_name}, {font}, {font_size}, &H00FFFFFF, &H0000FFFF, &H00000000, &H64000000, 0,0,0,0, 100,100, 0, 0, 1, {outline}, 0, {alignment_code}, 40,40,60, 1",
+        f"Style: {style_name}, {font}, {font_size}, &H00FFFFFF, &H0000FFFF, &H00000000, &H64000000, 0,0,0,0, 100,100, 0, 0, 1, {outline}, 0, {alignment_code}, {horizontal_margin}, {horizontal_margin}, 60, 1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -135,7 +192,11 @@ def build_karaoke_ass(
     events: list[str] = []
     res_x, res_y = play_res
     line_y = int(res_y * line_position_ratio)
-    position_prefix = f"{{\\pos({res_x // 2},{line_y})\\q2\\1c&HFFFFFF&}}"
+    clip_left = horizontal_margin
+    clip_right = res_x - horizontal_margin
+    position_prefix = (
+        f"{{\\clip({clip_left},0,{clip_right},{res_y})\\pos({res_x // 2},{line_y})\\q2\\1c&HFFFFFF&}}"
+    )
 
     def append_event(word_slice: list[WordTiming]) -> None:
         if not word_slice:
@@ -184,6 +245,10 @@ def build_karaoke_ass(
     else:
         segment_sources = [beat.transcript for beat in script.beats]
 
+    # Calculate maximum pixel width for text
+    # Available width = screen width - (2 * horizontal margin)
+    max_pixel_width = res_x - (2 * horizontal_margin)
+    
     for segment_text in segment_sources:
         segment_words = list(_consume_words_for_text(word_iter, segment_text))
         if not segment_words:
@@ -195,20 +260,45 @@ def build_karaoke_ass(
             char_count = 0
             end_idx = start_idx
             base_time = segment_words[start_idx].start
+            current_text_parts: list[str] = []
+            
             while end_idx < total_words:
                 word = segment_words[end_idx]
                 next_chars = len(word.text)
                 if end_idx > start_idx:
                     next_chars += 1  # space
+                    
+                # Build the text that would appear if we include this word
+                if end_idx > start_idx:
+                    current_text_parts.append(" ")
+                current_text_parts.append(word.text)
+                proposed_text = "".join(current_text_parts)
+                
+                # Check both character count AND pixel width
                 line_duration = word.end - base_time
                 over_chars = char_count + next_chars > max_chars_per_line
+                
+                # Measure actual pixel width of the proposed text
+                estimated_width = _estimate_text_width(proposed_text, font, font_size, outline)
+                over_width = estimated_width > max_pixel_width
+                
                 over_time = line_duration > max_line_duration
-                if (over_chars or over_time) and end_idx > start_idx:
+                
+                # Break if we exceed ANY constraint (and we have at least one word)
+                if (over_chars or over_width or over_time) and end_idx > start_idx:
+                    # Remove the word we just added since it caused overflow
+                    current_text_parts.pop()  # Remove the word
+                    if end_idx > start_idx:
+                        current_text_parts.pop()  # Remove the space before it
                     break
+                    
                 char_count += next_chars
                 end_idx += 1
+                
             if end_idx == start_idx:
+                # Edge case: even a single word is too long, include it anyway
                 end_idx += 1
+                
             append_event(segment_words[start_idx:end_idx])
             start_idx = end_idx
 

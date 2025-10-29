@@ -81,11 +81,16 @@ class JobContext:
 class ClipTask:
     job_context: JobContext
     clip_id: str
+    force_preprocess: bool = False
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "ClipTask":
         context = JobContext.from_payload(payload["jobContext"])
-        return cls(job_context=context, clip_id=str(payload["clipId"]))
+        return cls(
+            job_context=context,
+            clip_id=str(payload["clipId"]),
+            force_preprocess=bool(payload.get("forcePreprocess", False)),
+        )
 
 
 @dataclass

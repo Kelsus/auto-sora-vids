@@ -2,3 +2,4 @@ ffmpeg-python
 moviepy
 numpy<2.3
 soundfile
+openai>=1.0.0

@@ -27,8 +27,14 @@ class ScriptEngine:
         article: ArticleBundle,
         review: "ScriptReviewDecision | None" = None,
         previous_script: ScriptPlan | None = None,
+        chart_outline: str | None = None,
     ) -> ScriptPlan:
-        prompt = render_planning_prompt(article, review=review, previous_script=previous_script)
+        prompt = render_planning_prompt(
+            article,
+            review=review,
+            previous_script=previous_script,
+            chart_outline=chart_outline,
+        )
         raw = self.llm.complete(prompt)
         logger.debug("LLM raw response: %s", raw)
         payload = load_json_with_repair(raw, logger=logger)

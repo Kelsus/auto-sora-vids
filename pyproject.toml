@@ -21,8 +21,9 @@ dependencies = [
   "ffmpeg-python>=0.2",
   "soundfile>=0.12",
   "anthropic>=0.20",
-  "google-cloud-storage>=3.4"
-  , "google-genai>=1.0.0"
+  "google-cloud-storage>=3.4",
+  "google-genai>=1.0.0",
+  "openai>=1.0.0"
 ]
 
 [project.optional-dependencies]
@@ -33,3 +34,7 @@ dev = [
 
 [project.scripts]
 aivideo = "aivideomaker.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["backend/cdk.out"]

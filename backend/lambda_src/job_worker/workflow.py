@@ -46,9 +46,29 @@ class PipelineWorkflow:
 
     def generate_prompts(self, metadata: JobMetadata, dry_run: bool | None = None) -> JobContext:
         dry_run_value = self._resolve_dry_run(dry_run)
-        runner = self._get_runner(metadata.pipeline_config)
-        prompts_result = runner.run_prompts(metadata.article_url, dry_run=dry_run_value)
-        bundle = prompts_result.bundle
+        pipeline_overrides = metadata.pipeline_config or {}
+        resume_key = pipeline_overrides.get("resume_from_bundle")
+
+        bundle_key_override: str | None = None
+        if isinstance(resume_key, str) and resume_key.strip() and resume_key.lower() not in {"true", "false"}:
+            bundle_key_override = resume_key.strip()
+
+        if resume_key:
+            target_bundle_key = bundle_key_override or self._settings.bundle_key(metadata.job_id)
+            bundle = self._bundle_store.load(target_bundle_key)
+            clip_ids = [
+                prompt.chunk_id
+                for prompt in bundle.prompts.media_prompts
+                if getattr(prompt, "render_mode", "") == "sora_clip"
+            ]
+            if not clip_ids:
+                clip_ids = [prompt.chunk_id for prompt in bundle.prompts.media_prompts]
+        else:
+            runner = self._get_runner(pipeline_overrides)
+            prompts_result = runner.run_prompts(metadata.article_url, dry_run=dry_run_value)
+            bundle = prompts_result.bundle
+            clip_ids = prompts_result.clip_ids
+
         bundle_slug = bundle.article.slug
         job_id = metadata.job_id
         if job_id != bundle_slug:
@@ -56,13 +76,13 @@ class PipelineWorkflow:
 
         run_dir = self._sync_run_directory(bundle, job_id, source_preference="slug")
         bundle_key = self._settings.bundle_key(job_id)
+        if bundle_key_override:
+            bundle_key = bundle_key_override
         output_prefix = self._settings.run_prefix(job_id)
 
         self._write_bundle(run_dir, bundle)
         self._bundle_store.save(bundle_key, bundle)
         self._storage.upload_directory(run_dir, output_prefix)
-
-        clip_ids = prompts_result.clip_ids
 
         update = JobStatusUpdate(
             status="RUNNING",
@@ -88,6 +108,18 @@ class PipelineWorkflow:
 
     def render_clip(self, task: ClipTask) -> Dict[str, Any]:
         context = task.job_context
+        if context.pipeline_config.get("resume_from_bundle") and task.force_preprocess:
+            logger.info(
+                "Resume mode: skipping preprocessing task for %s",
+                task.clip_id,
+            )
+            return {"clipId": task.clip_id, "skipped": True, "reason": "resume_preexisting"}
+        if context.pipeline_config.get("stop_before_sora") and not task.force_preprocess:
+            logger.info(
+                "Skipping core clip render for %s (pre-Sora run)",
+                task.clip_id,
+            )
+            return {"clipId": task.clip_id, "skipped": True, "reason": "pre_sora_only"}
         self._refresh_local_run_dir(context.job_id, context.output_prefix)
         bundle = self._bundle_store.load(context.bundle_key)
         runner = self._get_runner(context.pipeline_config)
@@ -121,12 +153,29 @@ class PipelineWorkflow:
         self._refresh_local_run_dir(context.job_id, context.output_prefix)
         bundle = self._bundle_store.load(context.bundle_key)
         runner = self._get_runner(context.pipeline_config)
+
+        if context.pipeline_config.get("stop_before_sora"):
+            logger.info("Skipping final stitch for job %s (pre-Sora run)", context.job_id)
+            self._repository.update_status(
+                context.job_id,
+                JobStatusUpdate(
+                    status="READY_FOR_SORA",
+                    attributes={
+                        "output_bucket": self._settings.output_bucket,
+                        "output_prefix": context.output_prefix,
+                        "stage": "pre_sora_complete",
+                    },
+                ),
+            )
+            return {"finalVideoKey": None}
+
         self._sync_run_directory(bundle, context.job_id, source_preference="job")
         result_bundle = runner.stitch_final(bundle, context.dry_run)
 
         run_dir = self._sync_run_directory(result_bundle, context.job_id, source_preference="slug")
         self._write_bundle(run_dir, result_bundle)
         self._bundle_store.save(context.bundle_key, result_bundle)
+
         absolute_final_video = self._resolve_final_video_path(run_dir, result_bundle.final_video)
         drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
         self._publish_run_outputs(
@@ -513,3 +562,43 @@ class PipelineWorkflow:
                 if isinstance(drive_folder, str) and drive_folder.strip():
                     return drive_folder.strip()
         return None
+
+    def _should_upload_final_artifacts(self, pipeline_config: Optional[Mapping[str, Any]]) -> bool:
+        if not pipeline_config or not isinstance(pipeline_config, Mapping):
+            return True
+
+        overrides = dict(pipeline_config)
+
+        if "deliver_final_exports" in overrides:
+            return self._coerce_bool(overrides["deliver_final_exports"], default=True)
+
+        if "deliverFinalExports" in overrides:
+            return self._coerce_bool(overrides["deliverFinalExports"], default=True)
+
+        if "disable_final_exports" in overrides:
+            return not self._coerce_bool(overrides["disable_final_exports"], default=False)
+
+        if "disableFinalExports" in overrides:
+            return not self._coerce_bool(overrides["disableFinalExports"], default=False)
+
+        if "skip_drive_upload" in overrides:
+            return not self._coerce_bool(overrides["skip_drive_upload"], default=False)
+
+        if "skipDriveUpload" in overrides:
+            return not self._coerce_bool(overrides["skipDriveUpload"], default=False)
+
+        return True
+
+    @staticmethod
+    def _coerce_bool(value: Any, *, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "off"}:
+                return False
+        return default

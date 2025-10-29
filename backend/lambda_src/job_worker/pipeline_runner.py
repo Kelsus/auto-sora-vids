@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from aivideomaker.orchestrator import (
     PipelineOrchestrator,
     PromptGenerationResult,
 )
-from aivideomaker.ssm import hydrate_env
+from aivideomaker.ssm import get_parameter, hydrate_env
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,10 @@ class PipelineRunner:
         if self._veo_credentials_parameter and "veo_credentials_parameter" not in updates and not config.veo_credentials_parameter:
             updates["veo_credentials_parameter"] = self._veo_credentials_parameter
 
+        credential_file = self._materialize_vertex_credentials()
+        if credential_file and not config.veo_credentials_path and "veo_credentials_path" not in updates:
+            updates["veo_credentials_path"] = credential_file
+
         hydrate_env(config.anthropic_api_key_env, self._anthropic_api_key_parameter)
         hydrate_env("OPENAI_API_KEY", self._openai_api_key_parameter)
         hydrate_env(config.elevenlabs_api_key_env, self._elevenlabs_api_key_parameter)
@@ -94,3 +99,29 @@ class PipelineRunner:
 
         self._orchestrator = PipelineOrchestrator.default(config)
         return self._orchestrator
+
+    def _materialize_vertex_credentials(self) -> Path | None:
+        if not self._veo_credentials_parameter:
+            return None
+        existing = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if existing:
+            path = Path(existing)
+            if path.exists():
+                return path
+
+        try:
+            payload = get_parameter(self._veo_credentials_parameter)
+        except Exception:
+            logger.exception("Failed to load Vertex credentials from %s", self._veo_credentials_parameter)
+            return None
+
+        target = self._data_root / "veo-service-account.json"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(payload, encoding="utf-8")
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(target)
+            logger.info("Wrote Vertex credentials to %s", target)
+            return target
+        except Exception:
+            logger.exception("Failed to materialize Vertex credentials at %s", target)
+            return None

@@ -147,7 +147,9 @@ curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs \
   -d '{
         "url": "s3://my-bundles/how-generative-engine-optimization-geo-rewrites-the-rules/bundle.json",
         "scheduled_datetime": "2024-08-15T21:30:00Z",
+        "job_type": "IMMEDIATE" | "SCHEDULED",
         "pipeline_config": {
+          "drive_folder": "Kelsus" | "Korsair" | "SearchClick",
           "media_provider": "veo",
           "veo_aspect_ratio": "1:1"
         }
@@ -156,6 +158,7 @@ curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs \
 Jobs transition `PENDING → QUEUED → RUNNING → COMPLETED/FAILED` automatically. The worker stores all run artifacts in the provisioned S3 bucket under `jobs/<jobId>/run/`, and copies the final MP4 into `jobs/final/` (which triggers the Google Drive transfer Lambda).
 
 The optional `pipeline_config` map mirrors the fields in `PipelineConfig`; any keys you include are applied only to that job. Set `pipeline_config.drive_folder` to the name of a subfolder beneath the configured Drive root (`GDRIVE_FOLDER_ID`) when you want the Google Drive forwarder to drop the final MP4 into that location for the job.
+
 ## Development Status (captions branch)
 - Karaoke captions (ASS/SSA) with per-word highlighting are implemented and burned via ffmpeg/libass when ElevenLabs alignment is available.
 - See `docs/TODO.md` for current tasks and next steps on caption styling/configuration and alternate timestamp sources (WhisperX/AssemblyAI).
