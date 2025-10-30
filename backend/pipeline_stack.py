@@ -169,7 +169,7 @@ class VideoAutomationStack(Stack):
             rest_api_name="Video Automation Jobs",
             api_key_source_type=apigateway.ApiKeySourceType.HEADER,
             default_cors_preflight_options=apigateway.CorsOptions(
-                allow_methods=["POST", "OPTIONS"],
+                allow_methods=["GET", "POST", "OPTIONS"],
                 allow_origins=apigateway.Cors.ALL_ORIGINS,
                 allow_headers=["*"],
             ),
@@ -177,6 +177,31 @@ class VideoAutomationStack(Stack):
         jobs_resource = api.root.add_resource("jobs")
         jobs_integration = apigateway.LambdaIntegration(ingest_lambda)
         jobs_resource.add_method("POST", jobs_integration, api_key_required=True)
+
+        job_lookup_lambda = lambda_python.PythonFunction(
+            self,
+            "JobLookupLambda",
+            entry=str(lambda_src),
+            index="job_lookup/handler.py",
+            handler="handler",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={
+                "JOBS_TABLE_NAME": jobs_table.table_name,
+                "STAGE": stage,
+            },
+            layers=[shared_layer],
+            bundling=function_bundling,
+        )
+        jobs_table.grant_read_data(job_lookup_lambda)
+
+        job_resource = jobs_resource.add_resource("{jobId}")
+        job_resource.add_method(
+            "GET",
+            apigateway.LambdaIntegration(job_lookup_lambda),
+            api_key_required=True,
+        )
 
         api_key_value = self.node.try_get_context("jobsApiKey") or "".join(
             secrets.choice(string.ascii_letters + string.digits)

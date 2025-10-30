@@ -84,3 +84,30 @@ def pytest_configure(config) -> None:  # pragma: no cover - pytest hook
         sys.modules["googleapiclient"] = google_module
         sys.modules["googleapiclient.discovery"] = discovery_module
         sys.modules["googleapiclient.http"] = http_module
+
+    if "openai" not in sys.modules:
+        openai_module = types.ModuleType("openai")
+
+        class _OpenAI:
+            pass
+
+        class _BadRequestError(Exception):
+            pass
+
+        responses_module = types.ModuleType("openai.types.responses")
+
+        class _Response:  # pragma: no cover - structural stub
+            pass
+
+        responses_module.Response = _Response
+
+        types_module = types.ModuleType("openai.types")
+        types_module.responses = responses_module
+
+        openai_module.OpenAI = _OpenAI
+        openai_module.BadRequestError = _BadRequestError
+        openai_module.types = types_module
+
+        sys.modules["openai"] = openai_module
+        sys.modules["openai.types"] = types_module
+        sys.modules["openai.types.responses"] = responses_module
