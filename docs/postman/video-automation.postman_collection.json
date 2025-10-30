@@ -14,6 +14,10 @@
           {
             "key": "Content-Type",
             "value": "application/json"
+          },
+          {
+            "key": "x-api-key",
+            "value": "{{api_key}}"
           }
         ],
         "body": {
@@ -35,6 +39,72 @@
           ]
         },
         "description": "Creates (or upserts) a video automation job. The job ID is derived from the article URL slug."
+      },
+      "response": []
+    },
+    {
+      "name": "List Jobs (Paginated)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{api_key}}"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{api_base_url}}/jobs?limit=10",
+          "host": [
+            "{{api_base_url}}"
+          ],
+          "path": [
+            "jobs"
+          ],
+          "query": [
+            {
+              "key": "limit",
+              "value": "10"
+            },
+            {
+              "key": "cursor",
+              "value": "",
+              "description": "Optional pagination cursor returned as `nextCursor` from the previous call."
+            }
+          ]
+        },
+        "description": "Retrieves a paginated list of jobs. Supply the optional `cursor` query parameter with the `nextCursor` value from a previous response to fetch the next page."
+      },
+      "response": []
+    },
+    {
+      "name": "Get Job By ID",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{api_key}}"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{api_base_url}}/jobs/{{job_id}}",
+          "host": [
+            "{{api_base_url}}"
+          ],
+          "path": [
+            "jobs",
+            "{{job_id}}"
+          ]
+        },
+        "description": "Fetches a single job by its `jobId`. The identifier is typically the slugified article URL returned when a job is created."
       },
       "response": []
     }
@@ -69,6 +139,16 @@
     {
       "key": "api_base_url",
       "value": "https://uxc155vpv4.execute-api.us-east-1.amazonaws.com/prod",
+      "type": "string"
+    },
+    {
+      "key": "api_key",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "job_id",
+      "value": "",
       "type": "string"
     }
   ]

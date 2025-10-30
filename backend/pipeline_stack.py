@@ -178,6 +178,30 @@ class VideoAutomationStack(Stack):
         jobs_integration = apigateway.LambdaIntegration(ingest_lambda)
         jobs_resource.add_method("POST", jobs_integration, api_key_required=True)
 
+        job_list_lambda = lambda_python.PythonFunction(
+            self,
+            "JobListLambda",
+            entry=str(lambda_src),
+            index="job_list/handler.py",
+            handler="handler",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={
+                "JOBS_TABLE_NAME": jobs_table.table_name,
+                "STAGE": stage,
+            },
+            layers=[shared_layer],
+            bundling=function_bundling,
+        )
+        jobs_table.grant_read_data(job_list_lambda)
+
+        jobs_resource.add_method(
+            "GET",
+            apigateway.LambdaIntegration(job_list_lambda),
+            api_key_required=True,
+        )
+
         job_lookup_lambda = lambda_python.PythonFunction(
             self,
             "JobLookupLambda",

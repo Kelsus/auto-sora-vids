@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -131,3 +131,16 @@ class JobsRepository:
             )
         except ClientError as exc:  # pragma: no cover
             raise RepositoryError("Failed to update job status") from exc
+
+    def list_jobs(
+        self,
+        limit: int,
+        exclusive_start_key: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        kwargs: Dict[str, Any] = {"Limit": limit}
+        if exclusive_start_key:
+            kwargs["ExclusiveStartKey"] = exclusive_start_key
+        response = self._table.scan(**kwargs)
+        items = response.get("Items", [])
+        last_key = response.get("LastEvaluatedKey")
+        return items, last_key

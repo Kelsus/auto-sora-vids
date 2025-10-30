@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any
 
 from common import JobsRepository, RepositoryError
+from common.dynamodb_utils import normalize_dynamodb_value
 
 
 class LookupError(RuntimeError):
@@ -23,18 +23,4 @@ class JobLookupStore:
         if item is None:
             return None
 
-        return _normalize(item)
-
-
-def _normalize(value: Any) -> Any:
-    if isinstance(value, Decimal):
-        if value == value.to_integral():
-            return int(value)
-        return float(value)
-    if isinstance(value, Mapping):
-        return {key: _normalize(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_normalize(v) for v in value]
-    if isinstance(value, set):
-        return [_normalize(v) for v in value]
-    return value
+        return normalize_dynamodb_value(item)
