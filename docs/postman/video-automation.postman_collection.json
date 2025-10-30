@@ -107,6 +107,47 @@
         "description": "Fetches a single job by its `jobId`. The identifier is typically the slugified article URL returned when a job is created."
       },
       "response": []
+    },
+    {
+      "name": "Patch Job",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "x-api-key",
+            "value": "{{api_key}}"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"RUNNING\",\n  \"job_type\": \"IMMEDIATE\",\n  \"pipeline_config\": {\n    \"drive_folder\": \"Editorial\"\n  },\n  \"scheduled_datetime\": \"2025-10-18T10:00:00Z\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{api_base_url}}/jobs/{{job_id}}",
+          "host": [
+            "{{api_base_url}}"
+          ],
+          "path": [
+            "jobs",
+            "{{job_id}}"
+          ]
+        },
+        "description": "Updates allowed fields (`status`, `job_type`, `pipeline_config`, `scheduled_datetime`) for an existing job. Omit fields you do not wish to change."
+      },
+      "response": []
     }
   ],
   "event": [

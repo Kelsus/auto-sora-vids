@@ -159,7 +159,7 @@ class VideoAutomationStack(Stack):
                 "STAGE": stage,
             },
             layers=[shared_layer],
-            bundling=ingest_bundling,
+            bundling=function_bundling,
         )
         jobs_table.grant_write_data(ingest_lambda)
 
@@ -169,7 +169,7 @@ class VideoAutomationStack(Stack):
             rest_api_name="Video Automation Jobs",
             api_key_source_type=apigateway.ApiKeySourceType.HEADER,
             default_cors_preflight_options=apigateway.CorsOptions(
-                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
                 allow_origins=apigateway.Cors.ALL_ORIGINS,
                 allow_headers=["*"],
             ),
@@ -192,7 +192,7 @@ class VideoAutomationStack(Stack):
                 "STAGE": stage,
             },
             layers=[shared_layer],
-            bundling=function_bundling,
+            bundling=ingest_bundling,
         )
         jobs_table.grant_read_data(job_list_lambda)
 
@@ -224,6 +224,30 @@ class VideoAutomationStack(Stack):
         job_resource.add_method(
             "GET",
             apigateway.LambdaIntegration(job_lookup_lambda),
+            api_key_required=True,
+        )
+
+        job_update_lambda = lambda_python.PythonFunction(
+            self,
+            "JobUpdateLambda",
+            entry=str(lambda_src),
+            index="job_update/handler.py",
+            handler="handler",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={
+                "JOBS_TABLE_NAME": jobs_table.table_name,
+                "STAGE": stage,
+            },
+            layers=[shared_layer],
+            bundling=function_bundling,
+        )
+        jobs_table.grant_read_write_data(job_update_lambda)
+
+        job_resource.add_method(
+            "PATCH",
+            apigateway.LambdaIntegration(job_update_lambda),
             api_key_required=True,
         )
 
