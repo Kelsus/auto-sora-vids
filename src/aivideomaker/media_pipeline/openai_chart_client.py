@@ -4,10 +4,24 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
-from openai import BadRequestError, OpenAI
-from openai.types.responses import Response
+try:  # Handle OpenAI SDK variants gracefully
+    from openai import OpenAI as _OpenAI  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - SDK too old/new
+    _OpenAI = None  # type: ignore[assignment]
+
+try:  # Handle renamed errors across SDK versions
+    from openai import BadRequestError as _BadRequestError  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover
+    try:
+        from openai import InvalidRequestError as _BadRequestError  # type: ignore[attr-defined]
+    except ImportError:  # pragma: no cover
+        _BadRequestError = Exception  # type: ignore[assignment]
+try:
+    from openai.types.responses import Response  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - fallback when types module missing
+    Response = Any  # type: ignore[assignment]
 
 from .chart_ai_prompt import ChartCodeSpec, build_chart_codegen_prompt
 
@@ -21,7 +35,7 @@ class OpenAIChartClient:
     response_timeout: float = 180.0
     store_responses: bool = False
     assistant_id: Optional[str] = None  # kept for backward compatibility
-    _client: OpenAI = field(init=False, repr=False)
+    _client: Any = field(init=False, repr=False)
     _api_key: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -30,8 +44,12 @@ class OpenAIChartClient:
             raise RuntimeError(
                 f"Missing OpenAI API key. Set {self.api_key_env} in your environment or disable OpenAI charts."
             )
+        if _OpenAI is None:  # pragma: no cover - happens when SDK unavailable (e.g., unit tests)
+            raise RuntimeError(
+                "OpenAI SDK is not available; install the official openai package or disable OpenAI charts."
+            )
         self._api_key = api_key
-        self._client = OpenAI(api_key=api_key, timeout=self.response_timeout)
+        self._client = _OpenAI(api_key=api_key, timeout=self.response_timeout)
 
     def generate_chart(self, spec: ChartCodeSpec, output_dir: Path, slug: str) -> Optional[Path]:
         """Generate a chart using OpenAI's Responses API with the code interpreter tool."""
@@ -140,7 +158,7 @@ class OpenAIChartClient:
                     include=["code_interpreter_call.outputs"],
                 )
                 return response, model
-            except BadRequestError as exc:
+            except _BadRequestError as exc:
                 message = str(exc)
                 unsupported = "Hosted tool 'code_interpreter' is not supported" in message
                 if not unsupported:

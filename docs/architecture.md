@@ -8,7 +8,7 @@
    - Narration transcript (for TTS or cameo voice session)
    - Visual direction aligned with the beat
    - Audio guidance (music cues, SFX, energy level)
-5. **Media Synthesis** – Submit prompts to Sora 2, capture the generated clips, and track metadata needed for downstream assembly.
+5. **Media Synthesis** – Submit prompts (with chart renders attached when available) to Sora 2, capture the generated clips, and track metadata needed for downstream assembly.
 6. **Post Production** – Stitch clips, enforce consistent voice track, mix audio levels, and export final deliverable into a drop folder.
 
 ## Key Components

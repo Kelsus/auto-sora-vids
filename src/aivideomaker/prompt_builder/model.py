@@ -29,6 +29,10 @@ class MediaPrompt(BaseModel):
     )
     chart_spec_id: Optional[str] = None
     chart_variant: Optional[str] = None
+    reference_images: List[str] = Field(
+        default_factory=list,
+        description="Absolute or relative paths to image assets that should accompany the prompt",
+    )
 
 
 class MediaPromptBundle(BaseModel):

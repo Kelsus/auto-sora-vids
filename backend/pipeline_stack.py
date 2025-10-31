@@ -345,7 +345,7 @@ class VideoAutomationStack(Stack):
             self,
             "ChartAssetLambda",
             code=chart_image_code,
-            timeout=Duration.minutes(4),
+            timeout=Duration.minutes(10),
             memory_size=2048,
             environment=chart_env,
         )
@@ -441,7 +441,7 @@ class VideoAutomationStack(Stack):
             ),
             result_path=sfn.JsonPath.DISCARD,
             payload_response_only=True,
-            task_timeout=sfn.Timeout.duration(Duration.minutes(10)),
+            task_timeout=sfn.Timeout.duration(Duration.minutes(12)),
         )
         chart_clip_task.add_retry(
             errors=["States.Timeout"],
@@ -470,30 +470,116 @@ class VideoAutomationStack(Stack):
             max_attempts=3,
             backoff_rate=2.0,
         )
-        render_clip_task = tasks.LambdaInvoke(
+        render_initiate_task = tasks.LambdaInvoke(
             self,
-            "RenderClip",
+            "InitiateSoraRender",
             lambda_function=worker_lambda,
             payload=sfn.TaskInput.from_object(
                 {
-                    "action": "GENERATE_CLIP",
+                    "action": "INITIATE_RENDER",
                     "jobContext.$": "$.jobContext",
                     "clipId.$": "$.clipId",
+                }
+            ),
+            result_path="$.renderJob",
+            payload_response_only=True,
+            task_timeout=sfn.Timeout.duration(Duration.minutes(2)),
+        )
+
+        wait_for_render = sfn.Wait(
+            self,
+            "WaitForSoraJob",
+            time=sfn.WaitTime.duration(Duration.seconds(30)),
+        )
+
+        render_poll_task = tasks.LambdaInvoke(
+            self,
+            "PollSoraRender",
+            lambda_function=worker_lambda,
+            payload=sfn.TaskInput.from_object(
+                {
+                    "action": "POLL_RENDER",
+                    "jobContext.$": "$.jobContext",
+                    "clipId.$": "$.clipId",
+                    "renderJob.$": "$.renderJob",
+                }
+            ),
+            result_path="$.renderJob",
+            payload_response_only=True,
+            task_timeout=sfn.Timeout.duration(Duration.minutes(2)),
+        )
+
+        render_download_task = tasks.LambdaInvoke(
+            self,
+            "FinalizeSoraRender",
+            lambda_function=worker_lambda,
+            payload=sfn.TaskInput.from_object(
+                {
+                    "action": "DOWNLOAD_RENDER",
+                    "jobContext.$": "$.jobContext",
+                    "clipId.$": "$.clipId",
+                    "renderJob.$": "$.renderJob",
                 }
             ),
             result_path=sfn.JsonPath.DISCARD,
             payload_response_only=True,
             task_timeout=sfn.Timeout.duration(Duration.minutes(15)),
         )
-        render_clip_task.add_retry(
-            errors=["States.Timeout"],
+
+        render_skipped = sfn.Pass(
+            self,
+            "RenderSkipped",
+            result_path=sfn.JsonPath.DISCARD,
+        )
+
+        render_complete = sfn.Pass(
+            self,
+            "RenderComplete",
+            result_path=sfn.JsonPath.DISCARD,
+        )
+
+        render_initiate_choice = sfn.Choice(self, "RenderReady?")
+        render_initiate_choice.when(
+            sfn.Condition.string_equals("$.renderJob.status", "SKIPPED"),
+            render_skipped,
+        )
+        render_initiate_choice.when(
+            sfn.Condition.string_equals("$.renderJob.status", "COMPLETED"),
+            render_download_task,
+        )
+        render_initiate_choice.otherwise(wait_for_render)
+
+        wait_for_render.next(render_poll_task)
+
+        render_poll_choice = sfn.Choice(self, "RenderCompleted?")
+        render_poll_choice.when(
+            sfn.Condition.string_equals("$.renderJob.status", "COMPLETED"),
+            render_download_task,
+        )
+        render_poll_choice.when(
+            sfn.Condition.string_equals("$.renderJob.status", "SKIPPED"),
+            render_skipped,
+        )
+        render_poll_choice.otherwise(wait_for_render)
+
+        render_poll_task.next(render_poll_choice)
+        render_download_task.next(render_complete)
+        render_skipped.next(render_complete)
+
+        processor_chain = (
+            sfn.Chain.start(chart_clip_task)
+            .next(still_clip_task)
+            .next(render_initiate_task)
+            .next(render_initiate_choice)
+        )
+
+        render_clips_map.iterator(processor_chain)
+        render_clips_map.add_retry(
+            errors=["States.ALL"],
             interval=Duration.seconds(60),
             max_attempts=3,
             backoff_rate=2.0,
         )
-        processor_chain = sfn.Chain.start(chart_clip_task).next(still_clip_task).next(render_clip_task)
-
-        render_clips_map.iterator(processor_chain)
         render_clips_map.add_catch(failure_chain, result_path="$.error")
 
         stitch_task = tasks.LambdaInvoke(

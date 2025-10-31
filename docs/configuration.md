@@ -17,7 +17,7 @@ available options and provides a sample configuration you can copy to
   "anthropic_api_key_env": "ANTHROPIC_API_KEY",
   "media_provider": "sora",
   "negative_prompt": "no subtitles, no captions, no on-screen text, no watermark",
-  "narration_voice_id": "FGY2WhTYpPnrIDTdsKH5",
+  "narration_voice_id": "gfRt6Z3Z8aTbpLfexQ7N",
   "elevenlabs_api_key_env": "ELEVEN_LABS_API_KEY",
   "narration_model_id": "eleven_turbo_v2",
   "narration_voice_settings": {
@@ -26,6 +26,7 @@ available options and provides a sample configuration you can copy to
   },
   "narration_enable_timestamps": true,
   "narration_audio_format": "mp3",
+  "prepare_voice_during_prompts": true,
   "use_music": true,
   "music_api_key_env": "ELEVEN_LABS_API_KEY",
   "music_prompt": "Suspenseful investigative score with gradual build.",
@@ -65,7 +66,7 @@ available options and provides a sample configuration you can copy to
 - **`media_provider`** – `"sora"` or `"veo"` depending on which video backend to use for clip rendering.
 - **`negative_prompt`** – Applied to every generated clip to avoid unwanted elements.
 - **`elevenlabs_api_key_env`** – Environment variable name that stores the ElevenLabs narration key.
-- **`narration_model_id`, `narration_voice_settings`, `narration_enable_timestamps`, `narration_audio_format`** – Detailed ElevenLabs narration controls.
+- **`narration_model_id`, `narration_voice_settings`, `narration_enable_timestamps`, `narration_audio_format`, `prepare_voice_during_prompts`** – Detailed ElevenLabs narration controls and whether narration is synthesized during prompt generation to drive alignment.
 - **`use_music`, `music_api_key_env`, `music_*`** – Toggle and configure ElevenLabs Music output.
 - **`use_real_sora`, `sora_*`** – Turn on real Sora rendering and set OpenAI credentials, polling cadence, timeout, and size.
 - **`veo_*`** – Settings for Google Veo (Gemini) rendering, including Vertex AI authentication. For managed environments, store the service-account JSON in AWS Systems Manager Parameter Store and set `veo_credentials_parameter` (or the corresponding environment override) to the secure parameter name. `veo_credentials_path` remains useful for local experimentation when a file on disk is more convenient.

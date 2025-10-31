@@ -12,7 +12,10 @@ from .model import Chunk, ChunkPlan
 logger = logging.getLogger(__name__)
 
 WORD_PATTERN = re.compile(r"\S+")
-ALLOWED_DURATIONS = (4, 8, 12)
+MIN_CHUNK_DURATION = 3.0
+MAX_CHUNK_DURATION = 12.0
+DURATION_PADDING = 0.35
+PREFERRED_MID_DURATION = 8.0
 
 
 @dataclass
@@ -45,10 +48,10 @@ class ChunkPlanner:
             if not beat_words:
                 continue
             duration = beat_words[-1].end - beat_words[0].start
-            if duration <= ALLOWED_DURATIONS[-1]:
+            if duration <= MAX_CHUNK_DURATION:
                 chunk_id = beat.id
                 text = beat.transcript.strip()
-                target_duration = self._select_duration(duration)
+                target_duration = self._apply_padding(duration)
                 chunks.append(
                     Chunk(
                         id=chunk_id,
@@ -155,7 +158,7 @@ class ChunkPlanner:
             start = current[0].start
             end = current[-1].end
             actual_duration = max(end - start, 0.01)
-            target_duration = self._select_duration(actual_duration)
+            target_duration = self._apply_padding(actual_duration)
             text = self._compose_segment_text(current)
             chunk_id = beat_id if len(words) == len(current) else f"{beat_id}-{seg_index}"
             segments.append(
@@ -179,7 +182,7 @@ class ChunkPlanner:
             tentative = current + [word]
             duration = tentative[-1].end - tentative[0].start
 
-            if duration > ALLOWED_DURATIONS[-1]:
+            if duration > MAX_CHUNK_DURATION:
                 flush()
                 current.append(word)
                 continue
@@ -187,13 +190,13 @@ class ChunkPlanner:
             current.append(word)
             duration = current[-1].end - current[0].start
 
-            if duration >= ALLOWED_DURATIONS[0]:
+            if duration >= MIN_CHUNK_DURATION:
                 next_word = words[idx + 1] if idx + 1 < len(words) else None
-                if duration >= ALLOWED_DURATIONS[1] or not next_word:
+                if duration >= PREFERRED_MID_DURATION or not next_word:
                     flush()
                 else:
                     projected = next_word.end - current[0].start
-                    if projected > ALLOWED_DURATIONS[-1]:
+                    if projected > MAX_CHUNK_DURATION:
                         flush()
 
         flush()
@@ -208,23 +211,27 @@ class ChunkPlanner:
 
     def _plan_without_alignment(self, script: ScriptPlan) -> ChunkPlan:
         chunks: list[Chunk] = []
+        cursor = 0.0
         for beat in script.beats:
             is_chart = bool(getattr(beat.visual, "type", "").lower() == "chart")
             transcripts = [beat.transcript.strip()] if is_chart else self._split_transcript(beat.transcript)
             for index, segment in enumerate(transcripts, start=1):
                 chunk_id = beat.id if len(transcripts) == 1 else f"{beat.id}-{index}"
-                duration = len(segment.split()) / 2.5
-                duration = float(self._select_duration(duration))
+                raw_duration = max(len(segment.split()) / 2.5, MIN_CHUNK_DURATION)
+                estimated = float(self._apply_padding(raw_duration))
+                start_time = cursor
+                end_time = cursor + estimated
                 chunks.append(
                     Chunk(
                         id=chunk_id,
                         beat_id=beat.id,
                         transcript=segment,
-                        estimated_duration_sec=float(duration or ALLOWED_DURATIONS[0]),
-                        start_time_sec=0.0,
-                        end_time_sec=float(duration or ALLOWED_DURATIONS[0]),
+                        estimated_duration_sec=estimated,
+                        start_time_sec=float(start_time),
+                        end_time_sec=float(end_time),
                     )
                 )
+                cursor = end_time
         total = sum(chunk.estimated_duration_sec for chunk in chunks)
         return ChunkPlan(chunks=chunks, total_duration_sec=total)
 
@@ -233,7 +240,7 @@ class ChunkPlanner:
         return [sentence for sentence in sentences if sentence]
 
     @staticmethod
-    def batch(chunks: Iterable[Chunk], batch_duration: float = ALLOWED_DURATIONS[-1]) -> list[list[Chunk]]:
+    def batch(chunks: Iterable[Chunk], batch_duration: float = MAX_CHUNK_DURATION) -> list[list[Chunk]]:
         current: list[Chunk] = []
         batches: list[list[Chunk]] = []
         current_duration = 0.0
@@ -249,9 +256,9 @@ class ChunkPlanner:
         return batches
 
     @staticmethod
-    def _select_duration(seconds: float) -> int:
-        seconds = max(seconds, ALLOWED_DURATIONS[0])
-        for candidate in ALLOWED_DURATIONS:
-            if seconds <= candidate:
-                return candidate
-        return ALLOWED_DURATIONS[-1]
+    def _apply_padding(seconds: float) -> float:
+        seconds = max(seconds, 0.01)
+        padded = seconds + DURATION_PADDING
+        clipped = max(padded, MIN_CHUNK_DURATION)
+        clipped = min(clipped, MAX_CHUNK_DURATION)
+        return round(clipped, 2)

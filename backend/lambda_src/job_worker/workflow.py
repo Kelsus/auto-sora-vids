@@ -12,6 +12,7 @@ from imageio_ffmpeg import get_ffmpeg_exe
 
 from aivideomaker.captions.ass_builder import write_karaoke_ass
 from aivideomaker.orchestrator import PipelineBundle
+from aivideomaker.media_pipeline.sora_client import SoraClient, SoraJobError
 
 from job_worker.bundle_store import BundleStore
 from job_worker.config import WorkerSettings
@@ -124,30 +125,182 @@ class PipelineWorkflow:
         bundle = self._bundle_store.load(context.bundle_key)
         runner = self._get_runner(context.pipeline_config)
         clip_result = runner.render_clip(bundle, task.clip_id, context.dry_run)
-        updated_bundle = clip_result.bundle
-        clip_path = clip_result.clip_asset
-        source_run_dir = self._settings.data_root / updated_bundle.article.slug
-        try:
-            relative_clip = clip_path.relative_to(source_run_dir)
-        except ValueError:
-            relative_clip = clip_path
-        run_dir = self._sync_run_directory(updated_bundle, context.job_id, source_preference="slug")
-        self._write_bundle(run_dir, updated_bundle)
-        self._bundle_store.save(context.bundle_key, updated_bundle)
-        self._storage.upload_directory(run_dir, context.output_prefix)
+        return self._store_clip_result(context, clip_result)
 
-        if isinstance(relative_clip, Path):
-            log_clip = relative_clip.as_posix()
-        else:
-            log_clip = str(relative_clip)
+    def initiate_clip_render(self, task: ClipTask) -> Dict[str, Any]:
+        context = task.job_context
+        if context.pipeline_config.get("stop_before_sora") and not task.force_preprocess:
+            logger.info(
+                "Skipping Sora render for %s (pre-Sora run)",
+                task.clip_id,
+            )
+            return {
+                "clipId": task.clip_id,
+                "status": "SKIPPED",
+                "reason": "pre_sora_only",
+            }
 
-        logger.info(
-            "Uploaded clip %s for job %s at %s",
-            task.clip_id,
-            context.job_id,
-            log_clip,
+        self._refresh_local_run_dir(context.job_id, context.output_prefix)
+        bundle = self._bundle_store.load(context.bundle_key)
+        self._sync_run_directory(bundle, context.job_id, source_preference="job")
+        runner = self._get_runner(context.pipeline_config)
+        orchestrator = runner._ensure_orchestrator()
+        provider = orchestrator.config.media_provider.lower()
+
+        if provider != "sora":
+            logger.info(
+                "Media provider %s is not Sora; processing clip %s synchronously",
+                provider,
+                task.clip_id,
+            )
+            clip_result = runner.render_clip(bundle, task.clip_id, context.dry_run)
+            self._store_clip_result(context, clip_result)
+            return {
+                "clipId": task.clip_id,
+                "status": "COMPLETED",
+                "provider": provider,
+                "mode": "SYNC",
+                "jobId": None,
+                "targetPath": None,
+            }
+
+        sora_client = self._ensure_sora_client(orchestrator)
+        run_dirs = orchestrator._prepare_run_environment(
+            bundle.article.slug,
+            self._settings.data_root,
+            cleanup=False,
         )
-        return {"clipId": task.clip_id}
+
+        if self._bundle_has_clip(bundle, task.clip_id):
+            logger.info(
+                "Clip %s already recorded in bundle; skipping Sora submission",
+                task.clip_id,
+            )
+            return {
+                "clipId": task.clip_id,
+                "status": "SKIPPED",
+                "reason": "existing_asset",
+                "provider": provider,
+            }
+
+        existing_clip = orchestrator._existing_clip_path(run_dirs, task.clip_id)
+        if existing_clip:
+            logger.info(
+                "Found existing clip for %s at %s; skipping new Sora job",
+                task.clip_id,
+                existing_clip,
+            )
+            return {
+                "clipId": task.clip_id,
+                "status": "SKIPPED",
+                "reason": "existing_file",
+                "provider": provider,
+            }
+
+        prompt = next(
+            (p for p in bundle.prompts.media_prompts if p.chunk_id == task.clip_id),
+            None,
+        )
+        if prompt is None:
+            prompt = orchestrator._fallback_prompt(bundle, task.clip_id)
+
+        job_info = sora_client.initiate_job(prompt, dry_run=context.dry_run)
+        target_relative = self._sora_target_relative(run_dirs, task.clip_id)
+
+        status = str(job_info.get("status", "IN_PROGRESS")).upper()
+        job_id = job_info.get("job_id")
+        logger.info(
+            "Started Sora job for clip %s (job_id=%s, status=%s)",
+            task.clip_id,
+            job_id,
+            status,
+        )
+        return {
+            "clipId": task.clip_id,
+            "status": status,
+            "jobId": job_id,
+            "targetPath": target_relative,
+            "provider": provider,
+        }
+
+    def poll_clip_render(self, task: ClipTask, render_job: Dict[str, Any]) -> Dict[str, Any]:
+        status = str(render_job.get("status", "")).upper()
+        if status in {"COMPLETED", "SKIPPED"}:
+            return render_job
+
+        job_id = render_job.get("jobId")
+        if not job_id:
+            render_job["status"] = "COMPLETED"
+            return render_job
+
+        context = task.job_context
+        runner = self._get_runner(context.pipeline_config)
+        orchestrator = runner._ensure_orchestrator()
+        sora_client = self._ensure_sora_client(orchestrator)
+
+        payload = sora_client.get_job_status(str(job_id))
+        job_status = str(payload.get("status", "IN_PROGRESS")).lower()
+        if job_status == "completed":
+            render_job = dict(render_job)
+            render_job["status"] = "COMPLETED"
+            render_job["jobDetails"] = payload
+            return render_job
+        if job_status == "failed":
+            error_message = payload.get("error") or payload
+            raise SoraJobError(f"Sora job {job_id} failed: {error_message}")
+
+        render_job = dict(render_job)
+        render_job["status"] = "IN_PROGRESS"
+        render_job["jobDetails"] = payload
+        return render_job
+
+    def complete_clip_render(self, task: ClipTask, render_job: Dict[str, Any]) -> Dict[str, Any]:
+        status = str(render_job.get("status", "")).upper()
+        provider = render_job.get("provider")
+        if status == "SKIPPED":
+            logger.info(
+                "Sora render skipped for clip %s (reason=%s)",
+                task.clip_id,
+                render_job.get("reason"),
+            )
+            return {"clipId": task.clip_id, "status": "SKIPPED"}
+
+        if render_job.get("mode") == "SYNC":
+            return {"clipId": task.clip_id, "status": "COMPLETED"}
+
+        context = task.job_context
+        self._refresh_local_run_dir(context.job_id, context.output_prefix)
+        bundle = self._bundle_store.load(context.bundle_key)
+        self._sync_run_directory(bundle, context.job_id, source_preference="job")
+        runner = self._get_runner(context.pipeline_config)
+        orchestrator = runner._ensure_orchestrator()
+
+        if provider != "sora":
+            logger.info(
+                "Provider %s handled synchronously; nothing to finalize",
+                provider,
+            )
+            return {"clipId": task.clip_id, "status": "COMPLETED"}
+
+        run_dirs = orchestrator._prepare_run_environment(
+            bundle.article.slug,
+            self._settings.data_root,
+            cleanup=False,
+        )
+        relative_target = render_job.get("targetPath")
+        if not relative_target:
+            relative_target = self._sora_target_relative(run_dirs, task.clip_id)
+        target_path = run_dirs["run_dir"] / Path(relative_target)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        job_id = render_job.get("jobId")
+        if job_id:
+            sora_client = self._ensure_sora_client(orchestrator)
+            sora_client.download_job(str(job_id), target_path)
+
+        clip_result = runner.render_clip(bundle, task.clip_id, context.dry_run)
+        self._store_clip_result(context, clip_result)
+        return {"clipId": task.clip_id, "status": "COMPLETED"}
 
     def stitch_final(self, context: JobContext) -> Dict[str, Any]:
         self._refresh_local_run_dir(context.job_id, context.output_prefix)
@@ -307,6 +460,47 @@ class PipelineWorkflow:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _store_clip_result(self, context: JobContext, clip_result: Any) -> Dict[str, Any]:
+        updated_bundle = clip_result.bundle
+        clip_path = clip_result.clip_asset
+        source_run_dir = self._settings.data_root / updated_bundle.article.slug
+        try:
+            relative_clip = clip_path.relative_to(source_run_dir)
+        except ValueError:
+            relative_clip = clip_path
+        run_dir = self._sync_run_directory(updated_bundle, context.job_id, source_preference="slug")
+        self._write_bundle(run_dir, updated_bundle)
+        self._bundle_store.save(context.bundle_key, updated_bundle)
+        self._storage.upload_directory(run_dir, context.output_prefix)
+
+        if isinstance(relative_clip, Path):
+            log_clip = relative_clip.as_posix()
+        else:
+            log_clip = str(relative_clip)
+
+        logger.info(
+            "Uploaded clip %s for job %s at %s",
+            clip_result.clip_id,
+            context.job_id,
+            log_clip,
+        )
+        return {"clipId": clip_result.clip_id}
+
+    def _bundle_has_clip(self, bundle: PipelineBundle, clip_id: str) -> bool:
+        for asset in bundle.sora_assets:
+            if Path(asset).stem == clip_id:
+                return True
+        return False
+
+    def _ensure_sora_client(self, orchestrator: Any) -> SoraClient:
+        client = getattr(orchestrator, "media_client", None)
+        if isinstance(client, SoraClient):
+            return client
+        raise RuntimeError("Sora media client is not configured")
+
+    def _sora_target_relative(self, run_dirs: Dict[str, Path], clip_id: str) -> str:
+        return (run_dirs["sora_dir"].relative_to(run_dirs["run_dir"]) / f"{clip_id}.mp4").as_posix()
 
     def _resolve_dry_run(self, override: bool | None) -> bool:
         return override if override is not None else self._settings.default_dry_run

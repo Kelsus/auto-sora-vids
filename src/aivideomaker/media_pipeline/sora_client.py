@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import time
 from pathlib import Path
-from typing import Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
+
+from PIL import Image, ImageOps
 
 import requests
 import random
@@ -191,15 +194,67 @@ class SoraClient:
         logger.info("")
         return assets
 
+    # Async-friendly helpers -------------------------------------------------
+
+    def initiate_job(self, prompt: MediaPrompt, *, dry_run: bool) -> dict[str, Any]:
+        """Start a single Sora job without waiting for completion."""
+
+        asset_dir = self._require_asset_dir()
+        target = asset_dir / f"{prompt.chunk_id}.mp4"
+        if target.exists() and target.stat().st_size == 0:
+            target.unlink()
+
+        if dry_run or not self.api_key:
+            if target.exists():
+                target.unlink()
+            target.touch()
+            return {
+                "status": "COMPLETED",
+                "job_id": None,
+                "target": target,
+            }
+
+        self._respect_submit_cooldown()
+        job = self._create_job_with_retry(prompt)
+        job_id = job.get("id")
+        if not job_id:
+            raise SoraJobError(f"Sora create response missing job id: {json.dumps(job)}")
+        return {
+            "status": "IN_PROGRESS",
+            "job_id": str(job_id),
+            "target": target,
+        }
+
+    def get_job_status(self, job_id: str) -> dict[str, Any]:
+        """Retrieve the latest status for a Sora job."""
+
+        response = requests.get(
+            f"{self.base_url}/videos/{job_id}",
+            headers=self._headers(),
+            timeout=self.request_timeout,
+        )
+        response.raise_for_status()
+        self._respect_rate_limits(response.headers)
+        return response.json()
+
+    def download_job(self, job_id: str, target: Path) -> Path:
+        """Download the rendered video for a completed Sora job."""
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.unlink()
+        self._download_video(job_id, target)
+        return target
+
     # Internal helpers -------------------------------------------------
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, *, as_json: bool = True) -> dict[str, str]:
         if not self.api_key:
             raise RuntimeError("Sora API key not configured")
-        return {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        if as_json:
+            headers["Content-Type"] = "application/json"
+        return headers
 
     def _safe_duration(self, prompt: MediaPrompt) -> int:
         desired = float(prompt.duration_sec or 8)
@@ -217,6 +272,54 @@ class SoraClient:
         if negative_prompt:
             parts.append(f"Avoid: {negative_prompt}.")
         return "\n".join(parts)
+
+    def _prepare_reference_images(self, prompt: MediaPrompt) -> list[Path]:
+        prepared: list[Path] = []
+        for entry in prompt.reference_images:
+            try:
+                path = Path(entry).expanduser()
+                if not path.exists() and not path.is_absolute():
+                    bases: list[Path] = []
+                    if self._asset_dir is not None:
+                        bases.append(self._asset_dir)
+                        bases.append(self._asset_dir.parent)
+                        bases.append(self._asset_dir.parent.parent)
+                    for base in bases:
+                        candidate = (base / path).resolve()
+                        if candidate.exists():
+                            path = candidate
+                            break
+                if not path.exists():
+                    logger.warning("Reference image %s does not exist; skipping", entry)
+                    continue
+                prepared.append(self._ensure_reference_dimensions(path))
+            except Exception as exc:  # pragma: no cover - file errors
+                logger.warning("Failed to encode reference image %s: %s", entry, exc)
+        return prepared
+
+    def _ensure_reference_dimensions(self, path: Path) -> Path:
+        target = self._target_dimensions()
+        try:
+            with Image.open(path) as img:
+                if img.size == target:
+                    return path
+
+                fitted = ImageOps.fit(img, target, method=Image.Resampling.LANCZOS)
+                suffix = path.suffix or ".png"
+                resized_path = path.with_name(f"{path.stem}-sora{suffix}")
+                fitted.save(resized_path, format=img.format or "PNG")
+                logger.debug("Resized reference image %s → %s", path, resized_path)
+                return resized_path
+        except Exception as exc:  # pragma: no cover - best-effort sizing
+            logger.warning("Failed to resize reference image %s: %s", path, exc)
+        return path
+
+    def _target_dimensions(self) -> tuple[int, int]:
+        try:
+            width_str, height_str = self.size.lower().split("x", 1)
+            return int(width_str), int(height_str)
+        except Exception:
+            return (720, 1280)
 
     def _create_job_with_retry(self, prompt: MediaPrompt, retries: int = 3, backoff: float = 5.0) -> dict:
         last_error: Exception | None = None
@@ -246,18 +349,47 @@ class SoraClient:
         raise SoraJobError("Failed to create Sora job")
 
     def _create_job(self, prompt: MediaPrompt) -> dict:
-        payload = {
+        reference_images = self._prepare_reference_images(prompt)
+        textual_prompt = self._compose_prompt(prompt, prompt.negative_prompt)
+
+        data: dict[str, Any] = {
             "model": self.model,
-            "prompt": self._compose_prompt(prompt, prompt.negative_prompt),
+            "prompt": textual_prompt,
             "seconds": str(self._safe_duration(prompt)),
             "size": self.size,
         }
-        response = requests.post(
-            f"{self.base_url}/videos",
-            headers=self._headers(),
-            json=payload,
-            timeout=self.request_timeout,
-        )
+
+        files = None
+        file_handle = None
+        if reference_images:
+            image_path = reference_images[0]
+            mime, _ = mimetypes.guess_type(image_path.name)
+            if not mime:
+                mime = "application/octet-stream"
+            file_handle = image_path.open("rb")
+            files = {
+                "input_reference": (image_path.name, file_handle, mime),
+            }
+
+        try:
+            if files:
+                response = requests.post(
+                    f"{self.base_url}/videos",
+                    headers=self._headers(as_json=False),
+                    data=data,
+                    files=files,
+                    timeout=self.request_timeout,
+                )
+            else:
+                response = requests.post(
+                    f"{self.base_url}/videos",
+                    headers=self._headers(),
+                    json=data,
+                    timeout=self.request_timeout,
+                )
+        finally:
+            if file_handle is not None:
+                file_handle.close()
         if response.status_code >= 400:
             logger.error("Sora create job failed (%s): %s", response.status_code, response.text)
         response.raise_for_status()
@@ -336,6 +468,20 @@ class SoraClient:
                 with target.open("wb") as handle:
                     for chunk in response.iter_content(chunk_size=8192):
                         handle.write(chunk)
+                if not self._validate_download(target):
+                    if attempt < self.download_max_attempts:
+                        target.unlink(missing_ok=True)
+                        delay = min(30.0, 2**attempt + random.uniform(0, 0.5))
+                        logger.warning(
+                            "Sora download for %s produced an invalid MP4; retrying in %.1fs",
+                            job_id,
+                            delay,
+                        )
+                        time.sleep(delay)
+                        continue
+                    raise SoraJobError(
+                        f"Sora download for {job_id} produced an invalid MP4 after {attempt} attempts"
+                    )
                 logger.info("Saved Sora video to %s", target)
                 return
             except requests.HTTPError as exc:
@@ -363,6 +509,32 @@ class SoraClient:
                     time.sleep(delay)
                     continue
                 raise
+
+    def _validate_download(self, path: Path) -> bool:
+        """Return True when the downloaded MP4 looks structurally valid."""
+
+        try:
+            with path.open("rb") as handle:
+                header = handle.read(12)
+                if len(header) < 12:
+                    return True  # Too small to validate, assume OK for local stubs/tests
+                if header[4:8] != b"ftyp":
+                    return True  # Non-MP4 payload; treat as acceptable fallback
+
+                handle.seek(0)
+                previous = b""
+                while True:
+                    chunk = handle.read(4096)
+                    if not chunk:
+                        break
+                    window = previous + chunk
+                    if b"moov" in window:
+                        return True
+                    previous = chunk[-3:]
+        except OSError:
+            return False
+
+        return False
 
     def _respect_submit_cooldown(self) -> None:
         if self.submit_cooldown <= 0.0:

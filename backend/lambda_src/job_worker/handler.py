@@ -24,6 +24,26 @@ def handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:  # pragma: 
         result["jobId"] = job_context.job_id
         return result
 
+    if action == "INITIATE_RENDER":
+        task = ClipTask.from_payload(event)
+        result = workflow.initiate_clip_render(task)
+        result.setdefault("jobId", task.job_context.job_id)
+        return result
+
+    if action == "POLL_RENDER":
+        task = ClipTask.from_payload(event)
+        render_job = event.get("renderJob") or {}
+        result = workflow.poll_clip_render(task, render_job)
+        result.setdefault("jobId", task.job_context.job_id)
+        return result
+
+    if action == "DOWNLOAD_RENDER":
+        task = ClipTask.from_payload(event)
+        render_job = event.get("renderJob") or {}
+        result = workflow.complete_clip_render(task, render_job)
+        result.setdefault("jobId", task.job_context.job_id)
+        return result
+
     if action == "STITCH_FINAL":
         job_context = JobContext.from_payload(event["jobContext"])
         result = workflow.stitch_final(job_context)

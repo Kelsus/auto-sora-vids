@@ -96,7 +96,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    session = boto3.session.Session(profile_name=args.profile, region_name=args.region)
+
+    profile = args.profile or os.getenv("AWS_PROFILE")
+    region = args.region or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    if not region and (args.stack_name or DEFAULT_STACK_NAME):
+        region = "us-east-1"
+    session = boto3.session.Session(profile_name=profile, region_name=region)
 
     stack_outputs: Dict[str, str] = {}
     if args.stack_name or DEFAULT_STACK_NAME:
@@ -245,14 +250,16 @@ def _resolve_state_machine_arn(session: boto3.session.Session, args: argparse.Na
 
 def _resolve_physical_resource_id(session: boto3.session.Session, stack_name: str, logical_id: str) -> Optional[str]:
     cf = session.client("cloudformation")
+    paginator = cf.get_paginator("list_stack_resources")
     try:
-        resp = cf.describe_stack_resources(StackName=stack_name, LogicalResourceId=logical_id)
+        for page in paginator.paginate(StackName=stack_name):
+            for resource in page.get("StackResourceSummaries", []):
+                logical = resource.get("LogicalResourceId", "")
+                if logical == logical_id or logical.startswith(logical_id):
+                    return resource.get("PhysicalResourceId")
     except cf.exceptions.ClientError:
         return None
-    resources = resp.get("StackResources", [])
-    if not resources:
-        return None
-    return resources[0].get("PhysicalResourceId")
+    return None
 
 
 def _build_metadata(args: argparse.Namespace) -> Dict[str, Any]:

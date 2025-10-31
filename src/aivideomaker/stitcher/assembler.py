@@ -15,6 +15,13 @@ from moviepy.editor import (
 )
 import ffmpeg
 
+from PIL import Image
+
+# moviepy still references the deprecated Image.ANTIALIAS constant on older
+# releases. Pillow 10+ removed it, so provide a compatibility alias.
+if not hasattr(Image, "ANTIALIAS") and hasattr(Image, "Resampling"):  # pragma: no cover
+    Image.ANTIALIAS = Image.Resampling.LANCZOS  # type: ignore[attr-defined]
+
 logger = logging.getLogger(__name__)
 
 
@@ -97,7 +104,8 @@ class Stitcher:
             voice_clip = AudioFileClip(str(voice_track)).volumex(voice_volume)
             voice_duration = voice_clip.duration
             audio_clips.append(voice_clip)
-            target_duration = max(target_duration, voice_duration)
+            # Set target to voice duration to ensure video matches narration length
+            target_duration = voice_duration
 
         if music_track:
             music_clip = AudioFileClip(str(music_track)).volumex(music_volume)
@@ -111,6 +119,7 @@ class Stitcher:
         else:
             composite = None
 
+        # Synchronize video duration with narration
         if target_duration > video_duration + duration_tolerance:
             logger.info(
                 "Extending final video from %.2fs to %.2fs to align with narration",
@@ -118,6 +127,13 @@ class Stitcher:
                 target_duration,
             )
             final = final.set_duration(target_duration)
+        elif video_duration > target_duration + duration_tolerance:
+            logger.info(
+                "Trimming final video from %.2fs to %.2fs to align with narration",
+                video_duration,
+                target_duration,
+            )
+            final = final.subclip(0, target_duration)
 
         if level_audio:
             logger.info("Audio leveling placeholder; integrate ffmpeg filters here")

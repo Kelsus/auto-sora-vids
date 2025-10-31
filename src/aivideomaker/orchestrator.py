@@ -9,7 +9,7 @@ import textwrap
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import Any, ClassVar, Iterable, NamedTuple, Optional
+from typing import Any, Iterable, NamedTuple, Optional
 
 from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field
@@ -31,25 +31,12 @@ from aivideomaker.media_pipeline.chart_ai_prompt import build_chart_codegen_spec
 from aivideomaker.media_pipeline.openai_chart_client import OpenAIChartClient
 from aivideomaker.media_pipeline.elevenlabs_client import ElevenLabsClient
 from aivideomaker.media_pipeline.sora_client import SoraClient
-from aivideomaker.media_pipeline.still_image_client import StillImageClient
-from aivideomaker.media_pipeline.still_scene_prompter import ScenePrompt, StillScenePrompter
 from aivideomaker.media_pipeline.veo_client import VeoClient
 from aivideomaker.media_pipeline.voice import VoiceSessionManager, NarrationAsset
 from aivideomaker.media_pipeline.elevenlabs_music_client import ElevenLabsMusicClient
 from aivideomaker.orchestrator_chart_models import ChartSpec
 from aivideomaker.stitcher.assembler import Stitcher, CaptionSegment
 from aivideomaker.captions.ass_builder import write_karaoke_ass
-from moviepy.editor import CompositeVideoClip, ImageClip
-
-from PIL import Image, ImageDraw, ImageFont, ImageOps
-
-try:  # Pillow 10 removed Image.ANTIALIAS; keep compatibility for moviepy
-    from PIL import Image as _PILImage
-
-    if not hasattr(_PILImage, "ANTIALIAS") and hasattr(_PILImage, "Resampling"):
-        _PILImage.ANTIALIAS = _PILImage.Resampling.LANCZOS  # type: ignore[attr-defined]
-except ImportError:  # pragma: no cover - optional dependency
-    pass
 
 
 _dotenv_path = find_dotenv(usecwd=True)
@@ -153,7 +140,7 @@ class PipelineConfig(BaseModel):
     anthropic_api_key_env: str = "ANTHROPIC_API_KEY"
     media_provider: str = "sora"
     negative_prompt: Optional[str] = "no subtitles, no captions, no on-screen text, no watermark"
-    narration_voice_id: Optional[str] = "FGY2WhTYpPnrIDTdsKH5"
+    narration_voice_id: Optional[str] = "gfRt6Z3Z8aTbpLfexQ7N"
     elevenlabs_api_key_env: str = "ELEVEN_LABS_API_KEY"
     narration_model_id: str = "eleven_turbo_v2"
     narration_voice_settings: dict[str, float] = Field(
@@ -161,6 +148,7 @@ class PipelineConfig(BaseModel):
     )
     narration_enable_timestamps: bool = True
     narration_audio_format: str = "mp3"
+    prepare_voice_during_prompts: bool = True
     use_music: bool = True
     music_api_key_env: str = "ELEVEN_LABS_API_KEY"
     music_prompt: Optional[str] = None
@@ -279,87 +267,11 @@ class PipelineOrchestrator:
     music_client: ElevenLabsMusicClient | None
     stitcher: Stitcher
     style_template: Optional[StyleTemplate] = None
-    still_image_client: Optional[StillImageClient] = None
     chart_renderer: Optional[ChartRenderer] = None
     openai_chart_client: Optional[OpenAIChartClient] = None
-    still_scene_prompter: Optional[StillScenePrompter] = None
     chart_planner: Optional[ChartPlanner] = None
     chart_assigner: Optional[ChartAssigner] = None
-    _kenburns_index: int = 0
 
-    _KENBURNS_PATTERNS: ClassVar[list[dict[str, Any]]] = [
-        {
-            "name": "zoom_in_center",
-            "start_scale": 1.0,
-            "end_scale": 1.12,
-            "start_center": (0.5, 0.5),
-            "end_center": (0.5, 0.5),
-            "scale_strength": 1.0,
-            "pan_strength": 0.0,
-            "scale_ease": "ease_in_out",
-            "hold": {"start": 0.12, "end": 0.12},
-        },
-        {
-            "name": "pan_left_to_right",
-            "start_scale": 1.08,
-            "end_scale": 1.12,
-            "start_center": (0.42, 0.5),
-            "end_center": (0.6, 0.5),
-            "scale_strength": 0.6,
-            "pan_strength": 1.0,
-            "scale_ease": "ease_in_out",
-            "pan_ease": "ease_in_out",
-            "hold": {"start": 0.08, "end": 0.1},
-        },
-        {
-            "name": "zoom_out_down",
-            "start_scale": 1.16,
-            "end_scale": 1.0,
-            "start_center": (0.5, 0.46),
-            "end_center": (0.5, 0.58),
-            "scale_strength": 1.0,
-            "pan_strength": 0.75,
-            "scale_ease": "ease_in_out",
-            "pan_ease": "ease_out",
-            "hold": {"start": 0.1, "end": 0.18},
-        },
-        {
-            "name": "pan_bottom_to_top",
-            "start_scale": 1.08,
-            "end_scale": 1.08,
-            "start_center": (0.5, 0.64),
-            "end_center": (0.5, 0.36),
-            "scale_strength": 0.55,
-            "pan_strength": 1.0,
-            "scale_ease": "ease_out",
-            "pan_ease": "ease_in_out",
-            "hold": {"start": 0.05, "end": 0.12},
-        },
-        {
-            "name": "zoom_in_rule_of_thirds",
-            "start_scale": 1.02,
-            "end_scale": 1.16,
-            "start_center": (0.38, 0.56),
-            "end_center": (0.32, 0.46),
-            "scale_strength": 1.0,
-            "pan_strength": 0.65,
-            "scale_ease": "ease_in_out",
-            "pan_ease": "ease_in_out",
-            "hold": {"start": 0.08, "end": 0.1},
-        },
-        {
-            "name": "drift_diagonal",
-            "start_scale": 1.1,
-            "end_scale": 1.06,
-            "start_center": (0.58, 0.42),
-            "end_center": (0.42, 0.58),
-            "scale_strength": 0.8,
-            "pan_strength": 0.9,
-            "scale_ease": "ease_out",
-            "pan_ease": "ease_in_out",
-            "hold": {"start": 0.06, "end": 0.14},
-        },
-    ]
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineOrchestrator":
@@ -459,15 +371,6 @@ class PipelineOrchestrator:
             excerpt_chars=config.chart_analysis_excerpt_chars,
         )
         chart_assigner = ChartAssigner()
-        credentials_path = config.veo_credentials_path or os.getenv("GEMINI_KEY_FILE")
-        still_client = StillImageClient(
-            asset_dir=placeholder_root / "stills",
-            api_key=os.getenv(config.veo_api_key_env),
-            use_vertex=config.veo_use_vertex,
-            project=config.veo_project,
-            location=config.veo_location,
-            credentials_path=credentials_path,
-        )
         chart_renderer = ChartRenderer(placeholder_root / "charts")
         openai_chart_client: Optional[OpenAIChartClient] = None
         if config.enable_openai_charts:
@@ -501,14 +404,11 @@ class PipelineOrchestrator:
             music_client=music_client,
             stitcher=Stitcher(export_dir=placeholder_root / "exports"),
             style_template=style_template,
-            still_image_client=still_client,
             chart_renderer=chart_renderer,
             openai_chart_client=openai_chart_client,
-            still_scene_prompter=StillScenePrompter(),
             chart_planner=chart_planner,
             chart_assigner=chart_assigner,
         )
-        orchestrator._kenburns_index = 0
         return orchestrator
 
     @staticmethod
@@ -988,15 +888,29 @@ class PipelineOrchestrator:
 
         narration_asset: NarrationAsset | None = None
         alignment_payload: dict | None = None
-        allow_media_generation = script_greenlit and not prompts_only
-        if allow_media_generation and self.voice_manager.eleven_client:
+
+        script_text = script.full_transcript
+        should_prepare_voice = (
+            script_greenlit
+            and self.voice_manager.eleven_client
+            and script_text.strip()
+            and not dry_run
+            and (not prompts_only or self.config.prepare_voice_during_prompts)
+        )
+
+        if should_prepare_voice:
             voice_id = self.config.narration_voice_id or self.config.voice_id
-            narration_asset = self.voice_manager.prepare_voice(
-                script_text=script.full_transcript,
-                voice_id=voice_id,
-                dry_run=dry_run,
-            )
-            alignment_payload = narration_asset.alignment_payload
+            try:
+                narration_asset = self.voice_manager.prepare_voice(
+                    script_text=script_text,
+                    voice_id=voice_id,
+                    dry_run=dry_run,
+                )
+                alignment_payload = narration_asset.alignment_payload
+            except Exception as exc:  # pragma: no cover - defensive safeguard around TTS
+                logger.error("💥  Failed to prepare narration during planning: %s", exc)
+
+        allow_music_generation = script_greenlit and not prompts_only
 
         caption_path: Path | None = None
         if script.social_caption:
@@ -1009,7 +923,7 @@ class PipelineOrchestrator:
 
         music_path: Path | None = None
         if (
-            allow_media_generation
+            allow_music_generation
             and self.music_client
             and self.config.use_music
             and not dry_run
@@ -1168,22 +1082,28 @@ class PipelineOrchestrator:
             updated_bundle = self._bundle_with_asset(bundle, clip_id, existing_clip, run_dirs)
             return ClipRenderResult(bundle=updated_bundle, clip_id=clip_id, clip_asset=existing_clip)
 
-        clip_path: Optional[Path] = None
-        
-        # Check render_mode from prompt FIRST (overrides beat visual type)
-        # This ensures first chunk is always Sora even if beat says "still_motion" or "chart"
-        if prompt.render_mode == "sora_clip":
-            logger.debug("Clip %s has render_mode=sora_clip, forcing Sora generation", clip_id)
-            # Skip chart/still generation, go straight to Sora/Veo
-        else:
-            # Otherwise, check beat's visual type for chart/still
-            visual_mode = self._resolve_visual_mode(beat)
-            
-            if visual_mode == "chart":
-                clip_path = self._render_chart_clip(bundle, beat, run_dirs, clip_id, prompt)
-            if clip_path is None and visual_mode in {"still_motion", "still"}:
-                clip_path = self._render_still_clip(prompt, run_dirs, clip_id, beat)
+        updated_prompt = prompt
 
+        if prompt.render_mode != "sora_clip":
+            visual_mode = self._resolve_visual_mode(beat)
+            updates: dict[str, Any] = {"render_mode": "sora_clip"}
+            if visual_mode == "chart":
+                chart_path = self._prepare_chart_image(bundle, beat, run_dirs, clip_id)
+                if chart_path:
+                    ref_images = list(prompt.reference_images)
+                    stored_path = self._try_rel_path(chart_path, run_dirs["run_dir"]) or chart_path
+                    chart_str = str(stored_path)
+                    if chart_str not in ref_images:
+                        ref_images.append(chart_str)
+                    updates["reference_images"] = ref_images
+                    logger.info("📊  Prepared chart image for %s at %s", clip_id, chart_path)
+                else:
+                    logger.warning("⚠️  Unable to prepare chart image for %s; continuing without attachment", clip_id)
+            updated_prompt = prompt.model_copy(update=updates)
+            bundle = self._bundle_with_prompt(bundle, updated_prompt)
+        prompt = updated_prompt
+
+        clip_path: Optional[Path] = None
         provider = self.config.media_provider.lower()
         if clip_path is None:
             if provider == "sora":
@@ -1235,6 +1155,20 @@ class PipelineOrchestrator:
         updated_assets = filtered_assets + [stored_asset]
         return bundle.model_copy(update={"sora_assets": updated_assets})
 
+    def _bundle_with_prompt(
+        self,
+        bundle: PipelineBundle,
+        updated_prompt: MediaPrompt,
+    ) -> PipelineBundle:
+        prompts = []
+        for prompt in bundle.prompts.media_prompts:
+            if prompt.chunk_id == updated_prompt.chunk_id:
+                prompts.append(updated_prompt)
+            else:
+                prompts.append(prompt)
+        prompts_bundle = bundle.prompts.model_copy(update={"media_prompts": prompts})
+        return bundle.model_copy(update={"prompts": prompts_bundle})
+
     def stitch_bundle(
         self,
         bundle: PipelineBundle,
@@ -1265,56 +1199,12 @@ class PipelineOrchestrator:
             return "cinematic_broll"
         return beat.visual.type.lower()
 
-    def _render_still_clip(
-        self,
-        prompt: MediaPrompt,
-        run_dirs: dict[str, Path],
-        clip_id: str,
-        beat: Beat | None,
-    ) -> Path:
-        if not self.still_image_client:
-            raise RuntimeError("Still image client is not configured")
-        if not self.still_scene_prompter:
-            raise RuntimeError("Still scene prompter is not configured")
-        scene_prompt = self.still_scene_prompter.build_still_scene_prompt(prompt, beat)
-        final_prompt = scene_prompt.prompt
-        use_vertex = bool(getattr(self.still_image_client, "use_vertex", False))
-        negative_for_client: Optional[str] = None
-        if prompt.negative_prompt:
-            final_prompt = (
-                f"{final_prompt}\nAvoid the following visual elements: {prompt.negative_prompt}."
-            )
-            if not use_vertex:
-                negative_for_client = prompt.negative_prompt
-        negative_for_client = (
-            negative_for_client if negative_for_client is not None else None
-        )
-        self._log_scene_prompt(
-            run_dirs["stills_dir"],
-            clip_id,
-            final_prompt,
-            negative_for_client,
-            scene_type="still_scene",
-            extra=scene_prompt.metadata,
-        )
-        image_path = self.still_image_client.generate(
-            final_prompt,
-            negative_for_client,
-            clip_id,
-            aspect_ratio="9:16",
-        )
-        if not Path(image_path).is_absolute():
-            image_path = run_dirs["stills_dir"] / Path(image_path)
-        duration = max(float(prompt.duration_sec or 3.0), 1.5)
-        return self._image_to_video(Path(image_path), run_dirs["sora_dir"], clip_id, duration)
-
-    def _render_chart_clip(
+    def _prepare_chart_image(
         self,
         bundle: PipelineBundle,
         beat: Beat | None,
         run_dirs: dict[str, Path],
         clip_id: str,
-        prompt: MediaPrompt,
     ) -> Optional[Path]:
         if not beat or not beat.visual:
             return None
@@ -1336,357 +1226,14 @@ class PipelineOrchestrator:
                 return None
             spec = bundle.chart_specs.get(beat.visual.spec_id)
             if not spec:
-                logger.warning("No chart spec '%s' found; falling back to still generation", beat.visual.spec_id)
+                logger.warning("No chart spec '%s' found; unable to render chart", beat.visual.spec_id)
                 return None
             chart_png = Path(self.chart_renderer.render(spec, clip_id))
 
-        scene_path = self._compose_chart_scene(chart_png, beat, run_dirs, clip_id, prompt)
-        if scene_path is None:
-            # Absolute fallback: use the raw chart image
-            scene_path = chart_png
+        if chart_png and not chart_png.is_absolute():
+            chart_png = charts_dir / chart_png
 
-        duration = max(float(prompt.duration_sec or 3.0), 2.0)
-        return self._image_to_video(Path(scene_path), run_dirs["sora_dir"], clip_id, duration)
-
-    def _compose_chart_scene(
-        self,
-        chart_image: Path,
-        beat: Beat | None,
-        run_dirs: dict[str, Path],
-        clip_id: str,
-        prompt: MediaPrompt,
-    ) -> Path:
-        stills_dir = run_dirs["stills_dir"]
-        stills_dir.mkdir(parents=True, exist_ok=True)
-        target = stills_dir / f"{clip_id}.png"
-
-        if self.still_image_client and self.still_scene_prompter:
-            scene_prompt = self.still_scene_prompter.build_chart_scene_prompt(
-                prompt,
-                beat,
-                chart_image,
-            )
-            final_prompt = scene_prompt.prompt
-            use_vertex = bool(getattr(self.still_image_client, "use_vertex", False))
-            negative_for_client: Optional[str] = None
-            if prompt.negative_prompt:
-                final_prompt = (
-                    f"{final_prompt}\nAvoid the following visual elements: {prompt.negative_prompt}."
-                )
-                if not use_vertex:
-                    negative_for_client = prompt.negative_prompt
-            self._log_scene_prompt(
-                stills_dir,
-                clip_id,
-                final_prompt,
-                negative_for_client,
-                scene_type="chart_scene",
-                extra=scene_prompt.metadata,
-            )
-            try:
-                generated_path = Path(
-                    self.still_image_client.generate(
-                        prompt=final_prompt,
-                        negative=negative_for_client,
-                        output_name=clip_id,
-                        image_prompts=[chart_image],
-                        aspect_ratio="9:16",
-                    )
-                )
-                if not generated_path.is_absolute():
-                    generated_path = stills_dir / generated_path
-                if generated_path.exists():
-                    if generated_path != target:
-                        shutil.copyfile(generated_path, target)
-                    else:
-                        target = generated_path
-                    return target
-            except Exception as exc:  # pragma: no cover - defensive around external service
-                logger.warning("Still image client failed to compose chart scene: %s", exc)
-
-        return self._compose_chart_scene_stub(chart_image, target, beat)
-
-    def _compose_chart_scene_stub(self, chart_image: Path, target: Path, beat: Beat | None) -> Path:
-        self._log_scene_prompt(
-            target.parent,
-            target.stem,
-            "Fallback chart scene stub prompt",
-            None,
-            scene_type="chart_scene_stub",
-            extra={"chart_image": str(chart_image)},
-        )
-        try:
-            chart = Image.open(chart_image).convert("RGBA")
-        except Exception:
-            chart = None
-
-        scene = Image.new("RGBA", (1080, 1920), (26, 34, 48, 255))
-        draw = ImageDraw.Draw(scene)
-
-        # Create a simple workspace backdrop
-        draw.rectangle([0, int(scene.height * 0.55), scene.width, scene.height], fill=(18, 22, 30, 255))
-        draw.rectangle(
-            [int(scene.width * 0.08), int(scene.height * 0.14), int(scene.width * 0.92), int(scene.height * 0.62)],
-            fill=(12, 16, 24, 245),
-            outline=(88, 104, 128, 255),
-            width=4,
-        )
-
-        if chart is not None:
-            monitor_width = int(scene.width * 0.78)
-            monitor_height = int(scene.height * 0.38)
-            chart_resized = chart.resize((monitor_width, monitor_height), Image.LANCZOS)
-            paste_x = (scene.width - monitor_width) // 2
-            paste_y = int(scene.height * 0.18)
-            scene.alpha_composite(chart_resized, dest=(paste_x, paste_y))
-
-        title_text = beat.purpose if beat else "Data Insight"
-        font_title = self._load_font(48)
-        draw.text((scene.width // 2, int(scene.height * 0.64)), title_text, font=font_title, fill=(230, 235, 242, 255), anchor="ma")
-
-        final = scene.convert("RGB")
-        final.save(target, format="PNG")
-        return target
-
-    def _log_scene_prompt(
-        self,
-        stills_dir: Path,
-        clip_id: str,
-        prompt_text: str,
-        negative_prompt: Optional[str],
-        *,
-        scene_type: str,
-        extra: Optional[dict[str, Any]] = None,
-    ) -> None:
-        try:
-            prompts_dir = stills_dir / "_prompts"
-            prompts_dir.mkdir(parents=True, exist_ok=True)
-            payload: dict[str, Any] = {
-                "scene_type": scene_type,
-                "prompt": prompt_text,
-                "negative_prompt": negative_prompt,
-            }
-            if extra:
-                payload.update(extra)
-            (prompts_dir / f"{clip_id}.json").write_text(
-                json.dumps(payload, indent=2),
-                encoding="utf-8",
-            )
-        except Exception as exc:  # pragma: no cover - logging is best-effort
-            logger.debug("Failed to log scene prompt for %s: %s", clip_id, exc)
-
-    def _load_font(self, size: int) -> ImageFont.FreeTypeFont:
-        try:
-            return ImageFont.truetype("DejaVuSans.ttf", size=size)
-        except Exception:  # pragma: no cover
-            return ImageFont.load_default()
-
-    def _prepare_frame_for_video(self, image_path: Path) -> Path:
-        """Return path to a 1080x1920 RGB frame suitable for encoding."""
-        try:
-            with Image.open(image_path) as img:
-                img = img.convert("RGB")
-                original_size = img.size
-                target_size = (1080, 1920)
-                fitted = ImageOps.fit(img, target_size, method=Image.LANCZOS, centering=(0.5, 0.5))
-        except Exception as exc:  # pragma: no cover
-            logger.warning("Failed to prepare frame %s: %s", image_path, exc)
-            return image_path
-
-        if original_size == target_size and image_path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
-            return image_path
-
-        temp_path = image_path.with_suffix(".prepared.png")
-        fitted.save(temp_path, format="PNG")
-        return temp_path
-
-    @staticmethod
-    def _clamp01(value: float) -> float:
-        if value < 0.0:
-            return 0.0
-        if value > 1.0:
-            return 1.0
-        return value
-
-    @classmethod
-    def _kenburns_duration_scale(cls, duration: float) -> float:
-        if duration <= 1.5:
-            return 0.35
-        if duration >= 5.0:
-            return 1.0
-        span = 5.0 - 1.5
-        return 0.35 + ((duration - 1.5) / span) * (1.0 - 0.35)
-
-    @classmethod
-    def _kenburns_progress(
-        cls,
-        t: float,
-        total: float,
-        *,
-        hold_start: float = 0.0,
-        hold_end: float = 0.0,
-    ) -> float:
-        if total <= 0:
-            return 1.0
-        normalized = cls._clamp01(t / total)
-        hold_start = cls._clamp01(hold_start)
-        hold_end = cls._clamp01(hold_end)
-        hold_total = hold_start + hold_end
-        if hold_total >= 0.98:
-            return 1.0 if normalized >= 0.5 else 0.0
-        active_span = 1.0 - hold_total
-        if normalized <= hold_start:
-            return 0.0
-        if normalized >= 1.0 - hold_end:
-            return 1.0
-        return (normalized - hold_start) / active_span
-
-    @staticmethod
-    def _kenburns_apply_ease(value: float, easing: str | None) -> float:
-        value = PipelineOrchestrator._clamp01(value)
-        if not easing:
-            return value
-        key = easing.lower()
-        if key in {"linear", "none"}:
-            return value
-        if key in {"ease_in", "ease_in_quad"}:
-            return value * value
-        if key in {"ease_out", "ease_out_quad"}:
-            inv = 1.0 - value
-            return 1.0 - inv * inv
-        if key in {"ease_in_cubic"}:
-            return value * value * value
-        if key in {"ease_out_cubic"}:
-            inv = 1.0 - value
-            return 1.0 - inv * inv * inv
-        if key in {"ease_in_out", "smoothstep"}:
-            return value * value * (3.0 - 2.0 * value)
-        return value
-
-    @classmethod
-    def _kenburns_motion_spec(
-        cls,
-        pattern: dict[str, Any],
-        duration: float,
-    ) -> dict[str, Any]:
-        start_scale = float(pattern.get("start_scale", 1.0))
-        end_scale_raw = float(pattern.get("end_scale", 1.0))
-
-        start_center_raw = pattern.get("start_center", (0.5, 0.5))
-        end_center_raw = pattern.get("end_center", start_center_raw)
-        start_center = (
-            cls._clamp01(float(start_center_raw[0])),
-            cls._clamp01(float(start_center_raw[1])),
-        )
-        end_center_target = (
-            cls._clamp01(float(end_center_raw[0])),
-            cls._clamp01(float(end_center_raw[1])),
-        )
-
-        hold_cfg = pattern.get("hold") or {}
-        hold_start = cls._clamp01(float(hold_cfg.get("start", 0.0)))
-        hold_end = cls._clamp01(float(hold_cfg.get("end", 0.0)))
-
-        duration_scale = cls._kenburns_duration_scale(duration)
-
-        scale_strength = float(pattern.get("scale_strength", pattern.get("motion_strength", 1.0)))
-        pan_strength = float(pattern.get("pan_strength", pattern.get("motion_strength", 1.0)))
-        scale_strength = cls._clamp01(scale_strength * duration_scale)
-        pan_strength = cls._clamp01(pan_strength * duration_scale)
-
-        end_scale = start_scale + (end_scale_raw - start_scale) * scale_strength
-        end_center = (
-            cls._clamp01(start_center[0] + (end_center_target[0] - start_center[0]) * pan_strength),
-            cls._clamp01(start_center[1] + (end_center_target[1] - start_center[1]) * pan_strength),
-        )
-
-        return {
-            "start_scale": start_scale,
-            "end_scale": end_scale,
-            "start_center": start_center,
-            "end_center": end_center,
-            "hold_start": hold_start,
-            "hold_end": hold_end,
-            "scale_ease": pattern.get("scale_ease") or pattern.get("ease") or "smoothstep",
-            "pan_ease": pattern.get("pan_ease") or pattern.get("ease") or "smoothstep",
-        }
-
-    def _build_kenburns_clip(self, image_path: Path, duration: float) -> CompositeVideoClip:
-        pattern = self._KENBURNS_PATTERNS[self._kenburns_index % len(self._KENBURNS_PATTERNS)]
-        self._kenburns_index += 1
-
-        base_clip = ImageClip(str(image_path))
-        frame_w, frame_h = base_clip.size
-        total = max(duration, 0.01)
-
-        motion = self._kenburns_motion_spec(pattern, total)
-
-        start_scale = motion["start_scale"]
-        end_scale = motion["end_scale"]
-        start_center = motion["start_center"]
-        end_center = motion["end_center"]
-        hold_start = motion["hold_start"]
-        hold_end = motion["hold_end"]
-        scale_ease = motion["scale_ease"]
-        pan_ease = motion["pan_ease"]
-
-        start_center_px = (start_center[0] * frame_w, start_center[1] * frame_h)
-        end_center_px = (end_center[0] * frame_w, end_center[1] * frame_h)
-
-        def scale_progress(t: float) -> float:
-            base = self._kenburns_progress(t, total, hold_start=hold_start, hold_end=hold_end)
-            return self._kenburns_apply_ease(base, scale_ease)
-
-        def pan_progress(t: float) -> float:
-            base = self._kenburns_progress(t, total, hold_start=hold_start, hold_end=hold_end)
-            return self._kenburns_apply_ease(base, pan_ease)
-
-        def scale_func(t: float) -> float:
-            p = scale_progress(t)
-            return start_scale + (end_scale - start_scale) * p
-
-        def center_func(t: float) -> tuple[float, float]:
-            p = pan_progress(t)
-            cx = start_center_px[0] + (end_center_px[0] - start_center_px[0]) * p
-            cy = start_center_px[1] + (end_center_px[1] - start_center_px[1]) * p
-            return cx, cy
-
-        def position_func(t: float) -> tuple[float, float]:
-            s = scale_func(t)
-            cx, cy = center_func(t)
-            w = frame_w * s
-            h = frame_h * s
-            return cx - w / 2.0, cy - h / 2.0
-
-        animated = base_clip.resize(lambda t: scale_func(t)).set_position(position_func)
-        composite = CompositeVideoClip([animated], size=(frame_w, frame_h)).set_duration(duration)
-        return composite
-
-    def _image_to_video(
-        self,
-        image_path: Path,
-        target_dir: Path,
-        clip_id: str,
-        duration: float,
-    ) -> Path:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        output = target_dir / f"{clip_id}.mp4"
-        prepared = self._prepare_frame_for_video(image_path)
-        clip = self._build_kenburns_clip(prepared, duration).set_fps(30)
-        clip.write_videofile(
-            str(output),
-            codec="libx264",
-            audio=False,
-            bitrate="4000k",
-            logger=None,
-        )
-        clip.close()
-        if prepared != image_path:
-            try:
-                prepared.unlink()
-            except OSError:
-                pass
-        return output
+        return chart_png
 
     def _fallback_prompt(self, bundle: PipelineBundle, clip_id: str) -> MediaPrompt:
         chunk = next((c for c in bundle.chunks.chunks if getattr(c, "id", c.beat_id) == clip_id), None)
@@ -1807,13 +1354,12 @@ class PipelineOrchestrator:
         media_dir = run_dir / "media"
         sora_dir = media_dir / "sora_clips"
         veo_dir = media_dir / "veo_clips"
-        stills_dir = media_dir / "stills"
         charts_dir = media_dir / "charts"
         voice_dir = media_dir / "voice"
         music_dir = media_dir / "music"
         export_dir = run_dir / "exports"
 
-        for path in (sora_dir, veo_dir, stills_dir, charts_dir, voice_dir, music_dir, export_dir):
+        for path in (sora_dir, veo_dir, charts_dir, voice_dir, music_dir, export_dir):
             path.mkdir(parents=True, exist_ok=True)
 
         # Update client destinations to new per-run directories
@@ -1821,8 +1367,6 @@ class PipelineOrchestrator:
             self.media_client.asset_dir = sora_dir
         elif isinstance(self.media_client, VeoClient):
             self.media_client.asset_dir = veo_dir
-        if self.still_image_client:
-            self.still_image_client.asset_dir = stills_dir
         if self.chart_renderer:
             self.chart_renderer.output_dir = charts_dir
             self.chart_renderer.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1838,7 +1382,6 @@ class PipelineOrchestrator:
             "scripts_dir": scripts_dir,
             "sora_dir": sora_dir,
             "veo_dir": veo_dir,
-            "stills_dir": stills_dir,
             "charts_dir": charts_dir,
             "voice_dir": voice_dir,
             "music_dir": music_dir,
@@ -1933,7 +1476,8 @@ class PipelineOrchestrator:
         stitch_only: bool = False,
     ) -> PipelineBundle:
         run_dirs = self._prepare_run_environment(bundle.article.slug, output_dir, cleanup)
-        prompts = bundle.prompts
+        chunks_plan = bundle.chunks
+        prompts_bundle = bundle.prompts
 
         caption_path: Path | None = None
         if bundle.script.social_caption:
@@ -1983,6 +1527,22 @@ class PipelineOrchestrator:
             else:
                 logger.warning("⚠️  Narration synthesis skipped (missing text or ElevenLabs client)")
 
+        alignment_payload: dict | None = (
+            narration_asset.alignment_payload
+            if narration_asset and narration_asset.alignment_payload is not None
+            else bundle.narration_alignment_payload
+        )
+
+        if alignment_payload and not bundle.sora_assets:
+            should_replan = bool(narration_asset) or all(
+                abs(chunk.start_time_sec) < 1e-3 and abs(chunk.end_time_sec) < 1e-3
+                for chunk in chunks_plan.chunks
+            )
+            if should_replan:
+                logger.info("🔁  Recomputing chunk timeline from narration alignment")
+                chunks_plan = self.chunk_planner.plan(bundle.script, alignment=alignment_payload)
+                prompts_bundle = self.prompt_builder.build(bundle.article, bundle.script, chunks_plan)
+
         if (
             self.music_client
             and self.config.use_music
@@ -2007,47 +1567,43 @@ class PipelineOrchestrator:
         elif stitch_only:
             media_assets = self._collect_existing_assets(bundle, run_dirs["sora_dir"])
         else:
-            pre_rendered: dict[str, Path] = {}
-            sora_queue: list[tuple[str, "MediaPrompt"]] = []
+            prepared_prompts: list[MediaPrompt] = []
 
-            for prompt in prompts.media_prompts:
+            for prompt in prompts_bundle.media_prompts:
                 clip_id = prompt.chunk_id
                 chunk_ref = next(
-                    (c for c in bundle.chunks.chunks if getattr(c, "id", c.beat_id) == clip_id),
+                    (c for c in chunks_plan.chunks if getattr(c, "id", c.beat_id) == clip_id),
                     None,
                 )
                 beat_id = chunk_ref.beat_id if chunk_ref else clip_id
                 beat = next((b for b in bundle.script.beats if b.id == beat_id), None)
-                
-                # Check render_mode from prompt FIRST (this overrides beat visual type)
-                # This ensures first chunk is always Sora even if beat says "still_motion"
-                if prompt.render_mode == "sora_clip":
-                    logger.debug("Clip %s has render_mode=sora_clip, forcing Sora generation", clip_id)
-                    sora_queue.append((clip_id, prompt))
-                    continue
-                
-                # Otherwise, use beat's visual type
-                visual_mode = self._resolve_visual_mode(beat)
 
-                clip_path: Path | None = None
-                if visual_mode == "chart":
-                    clip_path = self._render_chart_clip(bundle, beat, run_dirs, clip_id, prompt)
-                    if clip_path:
-                        logger.info("📊  Generated chart clip for %s at %s", clip_id, clip_path)
-                        pre_rendered[clip_id] = clip_path
-                        continue
-                elif visual_mode in {"still_motion", "still"}:
-                    clip_path = self._render_still_clip(prompt, run_dirs, clip_id, beat)
-                    if clip_path:
-                        logger.info("🖼️  Generated still clip for %s at %s", clip_id, clip_path)
-                        pre_rendered[clip_id] = clip_path
-                        continue
+                working_prompt = prompt
+                if prompt.render_mode != "sora_clip":
+                    visual_mode = self._resolve_visual_mode(beat)
+                    updates: dict[str, Any] = {"render_mode": "sora_clip"}
+                    if visual_mode == "chart":
+                        chart_path = self._prepare_chart_image(bundle, beat, run_dirs, clip_id)
+                        if chart_path:
+                            ref_images = list(prompt.reference_images)
+                            stored_path = self._try_rel_path(chart_path, run_dirs["run_dir"]) or chart_path
+                            chart_str = str(stored_path)
+                            if chart_str not in ref_images:
+                                ref_images.append(chart_str)
+                            updates["reference_images"] = ref_images
+                            logger.info("📊  Prepared chart image for %s at %s", clip_id, chart_path)
+                        else:
+                            logger.warning(
+                                "⚠️  Unable to prepare chart image for %s; continuing without attachment",
+                                clip_id,
+                            )
+                    working_prompt = prompt.model_copy(update=updates)
+                    bundle = self._bundle_with_prompt(bundle, working_prompt)
+                    prompts_bundle = bundle.prompts
 
-                # Only reach here if no chart/still was generated - add to Sora queue
-                sora_queue.append((clip_id, prompt))
+                prepared_prompts.append(working_prompt)
 
-            if sora_queue:
-                queue_prompts = [item[1] for item in sora_queue]
+            if prepared_prompts:
                 if provider == "sora":
                     real_sora = not dry_run
                     if real_sora and not getattr(self.media_client, "api_key", None):
@@ -2057,14 +1613,17 @@ class PipelineOrchestrator:
                     submit_dry_run = not real_sora
                     logger.info(
                         "🎬  Submitting %d prompts to Sora (dry_run=%s)",
-                        len(queue_prompts),
+                        len(prepared_prompts),
                         submit_dry_run,
                     )
-                    sora_assets = self.media_client.submit_prompts(queue_prompts, dry_run=submit_dry_run)
+                    sora_assets = self.media_client.submit_prompts(prepared_prompts, dry_run=submit_dry_run)
                 elif provider == "veo":
                     if dry_run:
-                        logger.info("🧪  Dry run: skipping Veo submission for %d prompts", len(queue_prompts))
-                        sora_assets = self.media_client.submit_prompts(queue_prompts, dry_run=True)
+                        logger.info(
+                            "🧪  Dry run: skipping Veo submission for %d prompts",
+                            len(prepared_prompts),
+                        )
+                        sora_assets = self.media_client.submit_prompts(prepared_prompts, dry_run=True)
                     else:
                         has_key = bool(getattr(self.media_client, "api_key", None))
                         uses_vertex = bool(getattr(self.media_client, "use_vertex", False))
@@ -2072,24 +1631,25 @@ class PipelineOrchestrator:
                             raise RuntimeError(
                                 f"Missing Veo API key. Set {self.config.veo_api_key_env} in your environment."
                             )
-                        logger.info("🎬  Submitting %d prompts to Veo model %s", len(queue_prompts), self.config.veo_model)
-                        sora_assets = self.media_client.submit_prompts(queue_prompts, dry_run=False)
+                        logger.info(
+                            "🎬  Submitting %d prompts to Veo model %s",
+                            len(prepared_prompts),
+                            self.config.veo_model,
+                        )
+                        sora_assets = self.media_client.submit_prompts(prepared_prompts, dry_run=False)
                 else:
                     raise ValueError(f"Unsupported media_provider '{self.config.media_provider}'")
 
-                for (clip_id, _), asset_path in zip(sora_queue, sora_assets, strict=True):
-                    pre_rendered.setdefault(clip_id, Path(asset_path))
-
-            for prompt in prompts.media_prompts:
-                clip_path = pre_rendered.get(prompt.chunk_id)
-                if not clip_path:
-                    raise RuntimeError(f"No asset generated for clip {prompt.chunk_id}")
-                media_assets.append(clip_path)
+                media_assets = []
+                for prompt, asset in zip(prepared_prompts, sora_assets, strict=True):
+                    asset_path = Path(asset)
+                    stored = self._try_rel_path(asset_path, run_dirs["run_dir"]) or asset_path
+                    media_assets.append(stored)
 
         # Build captions: prefer ASS karaoke when alignment is present
         caption_segments: list[CaptionSegment] = []
         captions_ass_path: Path | None = None
-        if bundle.narration_alignment_payload:
+        if alignment_payload:
             try:
                 # Derive play resolution from Sora/Veo settings when possible
                 play_res = (720, 1280)
@@ -2101,8 +1661,8 @@ class PipelineOrchestrator:
                     pass
                 captions_ass_path = write_karaoke_ass(
                     script=bundle.script,
-                    alignment=bundle.narration_alignment_payload,
-                    chunks=bundle.chunks,
+                    alignment=alignment_payload,
+                    chunks=chunks_plan,
                     export_dir=run_dirs["export_dir"],
                     play_res=play_res,
                 )
@@ -2110,7 +1670,7 @@ class PipelineOrchestrator:
             except Exception as exc:  # pragma: no cover - defensive path
                 logger.warning("Failed to generate ASS captions; falling back to disabled captions: %s", exc)
         else:
-            caption_segments = self._build_captions(bundle.chunks)
+            caption_segments = self._build_captions(chunks_plan)
             if caption_segments:
                 self._write_captions_file(caption_segments, run_dirs["export_dir"] / "captions.srt")
 
@@ -2125,12 +1685,15 @@ class PipelineOrchestrator:
         )
         if should_stitch:
             voice_track = narration_asset.audio_path if narration_asset else None
+            # When stitch_only, don't burn captions - let the separate caption generation step handle it
+            # This avoids needing system ffmpeg in Docker (uses imageio-ffmpeg bundled binary instead)
+            stitch_captions_ass = None if stitch_only else captions_ass_path
             final_video = self.stitcher.stitch(
                 media_assets,
                 voice_track,
                 music_track,
                 captions=caption_segments,
-                captions_ass=captions_ass_path,
+                captions_ass=stitch_captions_ass,
                 output_basename=bundle.article.slug,
             )
         else:
@@ -2156,11 +1719,13 @@ class PipelineOrchestrator:
         output_dir.mkdir(parents=True, exist_ok=True)
         return bundle.model_copy(
             update={
+                "chunks": chunks_plan,
+                "prompts": prompts_bundle,
                 "sora_assets": media_assets,
                 "voice_transcript": narration_asset.transcript_path if narration_asset else bundle.voice_transcript,
                 "narration_audio": narration_asset.audio_path if narration_asset else bundle.narration_audio,
                 "narration_alignment": narration_asset.alignment_path if narration_asset else bundle.narration_alignment,
-                "narration_alignment_payload": narration_asset.alignment_payload if narration_asset else bundle.narration_alignment_payload,
+                "narration_alignment_payload": alignment_payload,
                 "music_track": music_track,
                 "social_caption_path": caption_path or bundle.social_caption_path,
                 "captions_ass_path": captions_ass_store or bundle.captions_ass_path,
