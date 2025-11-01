@@ -117,13 +117,13 @@ def create_chart_animation_prompt(
     """
     Create a Sora animation prompt for animating the chart within the scene.
     
-    Uses Claude to craft creative, appropriate animations that match
-    the chart type and narrative context.
+    The prompt should ask Sora to craft creative, appropriate animations that match
+    the chart type and narrative context. It should tell Sora that the animation should construct or destruct or decorate the chart (choose one) but not change the values in the chart. The chart should continue to communicate the information that it has within it to the viewer. 
+    It should also tell Sora to bring alive other elements in the scene contained in the image in a cinematic way consistent with the original narration and with intriguiging documentary filmmaking.
     
     Args:
         chart_info: Metadata about the chart (variant, title, data points)
         original_narration: The narration text for context
-        llm: LLM client (uses Claude if available)
         
     Returns:
         Sora animation prompt starting from the composite image
