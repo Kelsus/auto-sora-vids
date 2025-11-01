@@ -323,8 +323,7 @@ class VideoAutomationStack(Stack):
             platform=ecr_assets.Platform.LINUX_AMD64,
         )
         worker_image_code = lambda_.DockerImageCode.from_image_asset(**image_asset_kwargs)
-        chart_image_code = lambda_.DockerImageCode.from_image_asset(cmd=["chart_worker.handler.handler"], **image_asset_kwargs)
-        still_image_code = lambda_.DockerImageCode.from_image_asset(cmd=["still_worker.handler.handler"], **image_asset_kwargs)
+        composite_image_code = lambda_.DockerImageCode.from_image_asset(cmd=["composite_worker.handler.handler"], **image_asset_kwargs)
 
         worker_lambda = lambda_.DockerImageFunction(
             self,
@@ -340,35 +339,21 @@ class VideoAutomationStack(Stack):
             worker_lambda.add_environment(env_var, name)
             parameter.grant_read(worker_lambda)
 
-        chart_env = dict(worker_environment)
-        chart_lambda = lambda_.DockerImageFunction(
+        composite_env = dict(worker_environment)
+        composite_lambda = lambda_.DockerImageFunction(
             self,
-            "ChartAssetLambda",
-            code=chart_image_code,
-            timeout=Duration.minutes(10),
-            memory_size=2048,
-            environment=chart_env,
+            "CompositeAssetLambda",
+            code=composite_image_code,
+            timeout=Duration.minutes(15),
+            memory_size=4096,  # Higher memory for Gemini image generation
+            environment=composite_env,
         )
-        jobs_table.grant_read_write_data(chart_lambda)
-        output_bucket.grant_read_write(chart_lambda)
-
-        still_env = dict(worker_environment)
-        still_lambda = lambda_.DockerImageFunction(
-            self,
-            "StillAssetLambda",
-            code=still_image_code,
-            timeout=Duration.minutes(6),
-            memory_size=3072,
-            environment=still_env,
-        )
-        jobs_table.grant_read_write_data(still_lambda)
-        output_bucket.grant_read_write(still_lambda)
+        jobs_table.grant_read_write_data(composite_lambda)
+        output_bucket.grant_read_write(composite_lambda)
 
         for env_var, parameter, name in secret_parameters:
-            chart_lambda.add_environment(env_var, name)
-            still_lambda.add_environment(env_var, name)
-            parameter.grant_read(chart_lambda)
-            parameter.grant_read(still_lambda)
+            composite_lambda.add_environment(env_var, name)
+            parameter.grant_read(composite_lambda)
 
         failure_handler = tasks.LambdaInvoke(
             self,
@@ -428,10 +413,10 @@ class VideoAutomationStack(Stack):
             },
             result_path=sfn.JsonPath.DISCARD,
         )
-        chart_clip_task = tasks.LambdaInvoke(
+        composite_clip_task = tasks.LambdaInvoke(
             self,
-            "GenerateChartClip",
-            lambda_function=chart_lambda,
+            "GenerateCompositeClip",
+            lambda_function=composite_lambda,
             payload=sfn.TaskInput.from_object(
                 {
                     "jobContext.$": "$.jobContext",
@@ -441,30 +426,9 @@ class VideoAutomationStack(Stack):
             ),
             result_path=sfn.JsonPath.DISCARD,
             payload_response_only=True,
-            task_timeout=sfn.Timeout.duration(Duration.minutes(12)),
+            task_timeout=sfn.Timeout.duration(Duration.minutes(15)),
         )
-        chart_clip_task.add_retry(
-            errors=["States.Timeout"],
-            interval=Duration.seconds(60),
-            max_attempts=3,
-            backoff_rate=2.0,
-        )
-        still_clip_task = tasks.LambdaInvoke(
-            self,
-            "GenerateStillClip",
-            lambda_function=still_lambda,
-            payload=sfn.TaskInput.from_object(
-                {
-                    "jobContext.$": "$.jobContext",
-                    "clipId.$": "$.clipId",
-                    "forcePreprocess": True,
-                }
-            ),
-            result_path=sfn.JsonPath.DISCARD,
-            payload_response_only=True,
-            task_timeout=sfn.Timeout.duration(Duration.minutes(10)),
-        )
-        still_clip_task.add_retry(
+        composite_clip_task.add_retry(
             errors=["States.Timeout"],
             interval=Duration.seconds(60),
             max_attempts=3,
@@ -567,8 +531,7 @@ class VideoAutomationStack(Stack):
         render_skipped.next(render_complete)
 
         processor_chain = (
-            sfn.Chain.start(chart_clip_task)
-            .next(still_clip_task)
+            sfn.Chain.start(composite_clip_task)
             .next(render_initiate_task)
             .next(render_initiate_choice)
         )

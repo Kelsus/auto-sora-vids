@@ -119,16 +119,18 @@ The `infra/` directory contains an AWS CDK app that wraps the downstream pipelin
 
 ### Deploy
 1. Install CDK dependencies and bootstrap your target account/region if you have not already:
-   ```bash
-   cd infra
-   python -m venv .venv && source .venv/bin/activate
-   pip install -r requirements.txt
-   cdk bootstrap aws://<account>/<region>
-   ```
+ ```bash
+  cd infra
+  python -m venv .venv && source .venv/bin/activate
+  pip install -r requirements.txt
+  cdk bootstrap aws://<account>/<region>
+  ```
 2. Deploy the stack (pass your AWS account and region via context):
-   ```bash
-   cdk deploy --context account=<account> --context region=<region>
-   ```
+  ```bash
+  cdk deploy --context account=<account> --context region=<region> --context stage=kelsus-dev
+  ```
+  For all developer environments we standardize on the `kelsus-dev` stage so the CloudFormation stack name resolves to `VideoAutomationStack-kelsus-dev`.
+  Before generating a new API key with the deploy command, check whether `.env` already carries `AUTO_SORA_API_KEY`; reusing that value avoids breaking local automation expecting the existing key.
 3. After deployment:
    - Set the `GoogleDriveServiceAccountSecret` value to the raw JSON of a Drive-enabled service account (scope: `https://www.googleapis.com/auth/drive.file`).
    - Update the `GDRIVE_FOLDER_ID` environment variable on the `GoogleDriveForwarderLambda` function with the target Drive folder ID.

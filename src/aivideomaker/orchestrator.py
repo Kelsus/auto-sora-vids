@@ -182,6 +182,13 @@ class PipelineConfig(BaseModel):
     veo_location: str = "us-central1"
     veo_credentials_path: Optional[Path] = None
     veo_credentials_parameter: Optional[str] = None
+    # Gemini Image configuration (for chart composition)
+    gemini_image_model: str = "gemini-2.0-flash-exp"
+    gemini_use_vertex: bool = True
+    gemini_project: Optional[str] = None
+    gemini_location: str = "us-central1"
+    gemini_credentials_path: Optional[Path] = None
+    gemini_api_key_env: str = "GOOGLE_API_KEY"
     style_template_path: Optional[Path] = None
     enable_openai_charts: bool = False
     openai_chart_model: str = "gpt-5"
@@ -269,6 +276,8 @@ class PipelineOrchestrator:
     style_template: Optional[StyleTemplate] = None
     chart_renderer: Optional[ChartRenderer] = None
     openai_chart_client: Optional[OpenAIChartClient] = None
+    gemini_image_client: Optional[Any] = None  # GeminiImageClient - using Any to avoid circular import
+    llm: Optional[LLMClient] = None
     chart_planner: Optional[ChartPlanner] = None
     chart_assigner: Optional[ChartAssigner] = None
 
@@ -384,6 +393,25 @@ class PipelineOrchestrator:
                 logger.warning("OpenAI chart client disabled due to initialization error: %s", exc)
                 openai_chart_client = None
 
+        # Initialize Gemini Image client for chart composition
+        gemini_image_client = None
+        try:
+            from aivideomaker.media_pipeline.gemini_image_client import GeminiImageClient
+            
+            gemini_image_client = GeminiImageClient(
+                output_dir=None,  # Will be set per-run
+                api_key=os.getenv(config.gemini_api_key_env) if not config.gemini_use_vertex else None,
+                model=config.gemini_image_model,
+                use_vertex=config.gemini_use_vertex,
+                project=config.gemini_project or config.veo_project,  # Reuse veo project if not specified
+                location=config.gemini_location,
+                credentials_path=config.gemini_credentials_path or config.veo_credentials_path,
+            )
+            logger.info("Initialized Gemini Image client for chart composition")
+        except Exception as exc:
+            logger.warning("Gemini Image client disabled due to initialization error: %s", exc)
+            gemini_image_client = None
+
         orchestrator = cls(
             config=config,
             article_ingestor=ArticleIngestor(),
@@ -406,6 +434,8 @@ class PipelineOrchestrator:
             style_template=style_template,
             chart_renderer=chart_renderer,
             openai_chart_client=openai_chart_client,
+            gemini_image_client=gemini_image_client,
+            llm=llm_client,
             chart_planner=chart_planner,
             chart_assigner=chart_assigner,
         )
@@ -1087,18 +1117,18 @@ class PipelineOrchestrator:
         if prompt.render_mode != "sora_clip":
             visual_mode = self._resolve_visual_mode(beat)
             updates: dict[str, Any] = {"render_mode": "sora_clip"}
+            
             if visual_mode == "chart":
-                chart_path = self._prepare_chart_image(bundle, beat, run_dirs, clip_id)
-                if chart_path:
-                    ref_images = list(prompt.reference_images)
-                    stored_path = self._try_rel_path(chart_path, run_dirs["run_dir"]) or chart_path
-                    chart_str = str(stored_path)
-                    if chart_str not in ref_images:
-                        ref_images.append(chart_str)
-                    updates["reference_images"] = ref_images
-                    logger.info("📊  Prepared chart image for %s at %s", clip_id, chart_path)
-                else:
-                    logger.warning("⚠️  Unable to prepare chart image for %s; continuing without attachment", clip_id)
+                # NEW: Full chart composition workflow
+                logger.info("🎨  Executing chart composition workflow for %s", clip_id)
+                updates = self._compose_chart_scene(
+                    prompt=prompt,
+                    beat=beat,
+                    bundle=bundle,
+                    run_dirs=run_dirs,
+                    clip_id=clip_id,
+                )
+            
             updated_prompt = prompt.model_copy(update=updates)
             bundle = self._bundle_with_prompt(bundle, updated_prompt)
         prompt = updated_prompt
@@ -1234,6 +1264,106 @@ class PipelineOrchestrator:
             chart_png = charts_dir / chart_png
 
         return chart_png
+
+    def _compose_chart_scene(
+        self,
+        prompt: MediaPrompt,
+        beat: Beat | None,
+        bundle: PipelineBundle,
+        run_dirs: dict[str, Path],
+        clip_id: str,
+    ) -> dict[str, Any]:
+        """
+        Execute the full chart composition workflow:
+        1. Generate chart PNG
+        2. Transform prompt to static scene (Claude)
+        3. Generate composite image with chart (Gemini)
+        4. Create animation prompt (Claude)
+        
+        Returns dict with updates for the prompt.
+        """
+        from aivideomaker.prompt_builder.prompt_transform import (
+            convert_sora_prompt_to_static_scene,
+            create_chart_animation_prompt,
+        )
+        
+        updates: dict[str, Any] = {"render_mode": "sora_clip"}
+        
+        # Step 1: Generate chart PNG
+        chart_path = self._prepare_chart_image(bundle, beat, run_dirs, clip_id)
+        if not chart_path:
+            logger.warning("⚠️  Unable to prepare chart image for %s; skipping composition", clip_id)
+            return updates
+        
+        logger.info("📊  Generated chart PNG for %s at %s", clip_id, chart_path)
+        
+        # Step 2: Transform Sora prompt to static scene description
+        chart_info = {}
+        if beat and beat.visual:
+            chart_info = {
+                "variant": getattr(beat.visual, "chart_variant", "bar"),
+                "title": getattr(beat.visual, "chart_title", ""),
+                "data_points": getattr(beat.visual, "chart_data_points", []),
+            }
+        
+        static_scene_prompt = convert_sora_prompt_to_static_scene(
+            original_prompt=prompt.visual_prompt,
+            chart_info=chart_info,
+            llm=self.llm,
+        )
+        logger.info("🎨  Transformed to static scene prompt for %s", clip_id)
+        
+        # Step 3: Generate composite image with Gemini
+        if not self.gemini_image_client:
+            logger.warning("⚠️  Gemini Image client not available; cannot compose chart scene for %s", clip_id)
+            # Fallback: just use the chart as reference image
+            ref_images = list(prompt.reference_images)
+            stored_path = self._try_rel_path(chart_path, run_dirs["run_dir"]) or chart_path
+            chart_str = str(stored_path)
+            if chart_str not in ref_images:
+                ref_images.append(chart_str)
+            updates["reference_images"] = ref_images
+            return updates
+        
+        # Set output dir for gemini client
+        self.gemini_image_client.output_dir = run_dirs["charts_dir"]
+        
+        try:
+            composite_image = self.gemini_image_client.generate_scene_with_chart(
+                scene_description=static_scene_prompt,
+                chart_path=chart_path,
+                output_dir=run_dirs["charts_dir"],
+                clip_id=clip_id,
+            )
+            logger.info("✅  Generated composite image for %s at %s", clip_id, composite_image)
+        except Exception as exc:
+            logger.error("💥  Failed to generate composite image for %s: %s", clip_id, exc)
+            raise  # Fail loudly per user requirements
+        
+        # Step 4: Create animation prompt
+        animation_prompt = create_chart_animation_prompt(
+            chart_info=chart_info,
+            original_narration=prompt.transcript,
+            llm=self.llm,
+        )
+        logger.info("🎬  Created animation prompt for %s", clip_id)
+        
+        # Update prompt with all new fields
+        ref_images = list(prompt.reference_images)
+        stored_composite = self._try_rel_path(composite_image, run_dirs["run_dir"]) or composite_image
+        composite_str = str(stored_composite)
+        if composite_str not in ref_images:
+            ref_images.append(composite_str)
+        
+        updates.update({
+            "reference_images": ref_images,
+            "visual_prompt": animation_prompt,  # Replace with animation instructions
+            "static_scene_prompt": static_scene_prompt,
+            "animation_prompt": animation_prompt,
+            "composite_image_path": composite_str,
+        })
+        
+        return updates
 
     def _fallback_prompt(self, bundle: PipelineBundle, clip_id: str) -> MediaPrompt:
         chunk = next((c for c in bundle.chunks.chunks if getattr(c, "id", c.beat_id) == clip_id), None)

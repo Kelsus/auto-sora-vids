@@ -33,6 +33,20 @@ class MediaPrompt(BaseModel):
         default_factory=list,
         description="Absolute or relative paths to image assets that should accompany the prompt",
     )
+    
+    # Chart composition workflow fields
+    static_scene_prompt: Optional[str] = Field(
+        default=None,
+        description="Static scene description for Gemini image generation (chart workflow)",
+    )
+    animation_prompt: Optional[str] = Field(
+        default=None,
+        description="Sora animation prompt for chart reveal (chart workflow)",
+    )
+    composite_image_path: Optional[str] = Field(
+        default=None,
+        description="Path to Gemini-generated composite image (chart workflow)",
+    )
 
 
 class MediaPromptBundle(BaseModel):

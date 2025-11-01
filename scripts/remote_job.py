@@ -139,10 +139,15 @@ def main() -> None:
     if metadata:
         payload["metadata"] = metadata
 
+    headers = {
+        "x-api-key": api_key,
+        "Content-Type": "application/json",
+        "User-Agent": "curl/8.0.1",
+    }
     response = requests.post(
         jobs_url,
         json=payload,
-        headers={"x-api-key": api_key, "Content-Type": "application/json"},
+        headers=headers,
         timeout=30,
     )
     if response.status_code != 201:
