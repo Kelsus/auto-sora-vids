@@ -342,7 +342,7 @@ class VideoAutomationStack(Stack):
             "JobWorkerLambda",
             code=worker_image_code,
             timeout=Duration.minutes(15),
-            memory_size=4096,
+            memory_size=6144,
             environment=worker_environment,
         )
         jobs_table.grant_read_write_data(worker_lambda)
