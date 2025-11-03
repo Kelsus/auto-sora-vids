@@ -22,7 +22,7 @@ import boto3
 import requests
 
 
-DEFAULT_STACK_NAME = "VideoAutomationStack-kelsus-dev"
+DEFAULT_STACK_NAME = "VideoAutomationStack-prod"
 SUCCESS_STATUSES = {"SUCCEEDED", "COMPLETED", "READY_FOR_SORA"}
 TERMINAL_STATUSES = SUCCESS_STATUSES | {"FAILED", "TIMED_OUT", "ABORTED"}
 

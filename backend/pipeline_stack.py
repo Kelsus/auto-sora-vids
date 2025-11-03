@@ -178,20 +178,32 @@ class VideoAutomationStack(Stack):
         jobs_integration = apigateway.LambdaIntegration(ingest_lambda)
         jobs_resource.add_method("POST", jobs_integration, api_key_required=True)
 
-        api_key_value = self.node.try_get_context("jobsApiKey") or "".join(
-            secrets.choice(string.ascii_letters + string.digits)
-            for _ in range(40)
-        )
-        suffix = api_key_value[:8].lower()
-        api_key_name = f"video-automation-{stage}-{suffix}"
-        api_key = apigateway.ApiKey(
-            self,
-            "VideoJobsApiKey",
-            description="API key required to call the video jobs ingest endpoint",
-            enabled=True,
-            value=api_key_value,
-            api_key_name=api_key_name,
-        )
+        api_key_value = self.node.try_get_context("jobsApiKey")
+        api_key_id = self.node.try_get_context("jobsApiKeyId")
+
+        if api_key_id:
+            api_key = apigateway.ApiKey.from_api_key_id(
+                self,
+                "VideoJobsApiKey",
+                api_key_id,
+            )
+            if api_key_value is None:
+                api_key_value = "(imported)"
+        else:
+            api_key_value = api_key_value or "".join(
+                secrets.choice(string.ascii_letters + string.digits)
+                for _ in range(40)
+            )
+            suffix = api_key_value[:8].lower()
+            api_key_name = f"video-automation-{stage}-{suffix}"
+            api_key = apigateway.ApiKey(
+                self,
+                "VideoJobsApiKey",
+                description="API key required to call the video jobs ingest endpoint",
+                enabled=True,
+                value=api_key_value,
+                api_key_name=api_key_name,
+            )
         usage_plan = api.add_usage_plan(
             "VideoJobsUsagePlan",
             name=f"video-automation-{stage}",
@@ -362,9 +374,7 @@ class VideoAutomationStack(Stack):
             payload=sfn.TaskInput.from_object(
                 {
                     "action": "MARK_FAILED",
-                    "jobContext.$": "$.jobContext",
-                    "job.$": "$.job",
-                    "error.$": "$.error",
+                    "state.$": "$",
                 }
             ),
             result_path=sfn.JsonPath.DISCARD,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from job_worker.models import ClipTask, JobContext, JobMetadata
 from job_worker.workflow import PipelineWorkflow
@@ -63,8 +63,43 @@ def handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:  # pragma: 
         return result
 
     if action == "MARK_FAILED":
-        job_context = JobContext.from_payload(event["jobContext"])
-        workflow.mark_failed(job_context, error=event.get("error"))
-        return {"jobId": job_context.job_id, "status": "FAILED"}
+        state_payload: Dict[str, Any] = {}
+        if isinstance(event.get("state"), dict):
+            state_payload = event["state"]
+        else:
+            state_payload = event
+
+        job_context_payload = event.get("jobContext") or state_payload.get("jobContext")
+        job_context: Optional[JobContext] = None
+        if isinstance(job_context_payload, dict):
+            try:
+                job_context = JobContext.from_payload(job_context_payload)
+            except (KeyError, TypeError, ValueError):
+                job_context = None
+
+        job_payload = event.get("job") or state_payload.get("job") or state_payload
+        job_metadata: Optional[JobMetadata] = None
+        if isinstance(job_payload, dict) and "jobId" in job_payload and "articleUrl" in job_payload:
+            try:
+                job_metadata = JobMetadata.from_event(job_payload)
+            except (KeyError, TypeError, ValueError):
+                job_metadata = None
+
+        error_payload = event.get("error") or state_payload.get("error")
+
+        workflow.mark_failed(job_context, metadata=job_metadata, error=error_payload)
+
+        job_id: Optional[str] = None
+        if job_context:
+            job_id = job_context.job_id
+        elif job_metadata:
+            job_id = job_metadata.job_id
+        elif isinstance(job_payload, dict) and "jobId" in job_payload:
+            job_id = str(job_payload["jobId"])
+
+        if not job_id:
+            raise ValueError("Unable to determine job id for failure update")
+
+        return {"jobId": job_id, "status": "FAILED"}
 
     raise ValueError(f"Unknown action '{action}'")

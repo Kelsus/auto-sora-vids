@@ -127,10 +127,17 @@ The `infra/` directory contains an AWS CDK app that wraps the downstream pipelin
   ```
 2. Deploy the stack (pass your AWS account and region via context):
   ```bash
-  cdk deploy --context account=<account> --context region=<region> --context stage=kelsus-dev
+  cdk deploy \
+    --context account=<account> \
+    --context region=<region> \
+    --context stage=prod \
+    --context jobsApiKey=$AUTO_SORA_API_KEY \
+    --context jobsApiKeyId=<existing_api_key_id_optional>
   ```
-  For all developer environments we standardize on the `kelsus-dev` stage so the CloudFormation stack name resolves to `VideoAutomationStack-kelsus-dev`.
-  Before generating a new API key with the deploy command, check whether `.env` already carries `AUTO_SORA_API_KEY`; reusing that value avoids breaking local automation expecting the existing key.
+  We operate a single shared stack named `VideoAutomationStack-prod`; reuse the existing API key by supplying both `jobsApiKey` (the value) and, when redeploying, `jobsApiKeyId` (the API Gateway key ID) so CDK imports the key instead of replacing it. You can discover the ID with:
+  ```bash
+  aws apigateway get-api-keys --include-values --query "items[?value=='$AUTO_SORA_API_KEY'].id"
+  ```
 3. After deployment:
    - Set the `GoogleDriveServiceAccountSecret` value to the raw JSON of a Drive-enabled service account (scope: `https://www.googleapis.com/auth/drive.file`).
    - Update the `GDRIVE_FOLDER_ID` environment variable on the `GoogleDriveForwarderLambda` function with the target Drive folder ID.

@@ -337,6 +337,23 @@ def test_mark_failed_records_status(tmp_path):
     assert "error_message" in repo.updates[-1][1].attributes
 
 
+def test_mark_failed_without_context_uses_metadata(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    metadata = JobMetadata(job_id="story", article_url="https://example.com/story")
+
+    workflow.mark_failed(None, metadata=metadata, error={"message": "boom"})
+
+    assert repo.updates[-1][0] == "story"
+    assert repo.updates[-1][1].status == "FAILED"
+    assert repo.updates[-1][1].attributes["error_message"].startswith("{")
+
+
 def test_mark_failed_handler_updates_original_job(tmp_path, monkeypatch):
     settings = build_settings(tmp_path)
     runner = StubRunner(tmp_path)
@@ -429,6 +446,46 @@ def test_mark_failed_handler_updates_original_job(tmp_path, monkeypatch):
 
     assert repo.records[original_job_id]["status"] == "FAILED"
     assert repo.records[original_job_id]["error_message"].startswith("{")
+
+
+def test_mark_failed_handler_handles_state_payload(tmp_path, monkeypatch):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    job_id = "cybernews-com-replit-ai-vive-code-rogue"
+    repo.records[job_id] = {"status": "RUNNING"}
+
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+    monkeypatch.setattr(worker_handler, "PipelineWorkflow", lambda: workflow)
+
+    state_payload = {
+        "job": {
+            "jobId": job_id,
+            "articleUrl": "https://cybernews.com/ai-news/replit-ai-vive-code-rogue/",
+            "scheduledDatetime": "2025-11-02T22:26:09.440226+00:00",
+            "metadata": {
+                "pipeline_config": {
+                    "drive_folder": "Kelsus",
+                }
+            },
+            "jobType": "IMMEDIATE",
+        },
+        "error": {
+            "Error": "HTTPError",
+            "Cause": "403 Client Error",
+        },
+    }
+
+    event = {"action": "MARK_FAILED", "state": state_payload}
+
+    result = worker_handler.handler(event, None)
+
+    assert result == {"jobId": job_id, "status": "FAILED"}
+    record = repo.fetch(job_id)
+    assert record and record["status"] == "FAILED"
+    assert record["error_message"].startswith("{")
 
 
 def test_mark_running_transitions_when_expected(tmp_path):

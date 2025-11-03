@@ -446,16 +446,30 @@ class PipelineWorkflow:
         logger.info("Job %s marked as RUNNING", metadata.job_id)
         return {"job": raw_payload}
 
-    def mark_failed(self, context: JobContext, error: Dict[str, Any] | None = None) -> None:
+    def mark_failed(
+        self,
+        context: JobContext | None,
+        *,
+        metadata: JobMetadata | None = None,
+        error: Dict[str, Any] | None = None,
+    ) -> None:
         message = "Unknown error"
         if error:
             if isinstance(error, dict):
                 message = json.dumps(error)[:400]
             else:
                 message = str(error)[:400]
+        job_id: str | None = None
+        if context:
+            job_id = context.job_id
+        elif metadata:
+            job_id = metadata.job_id
+        if not job_id:
+            raise ValueError("Mark failed requires job context or metadata with job id")
+
         update = JobStatusUpdate(status="FAILED", attributes={"error_message": message})
-        self._repository.update_status(context.job_id, update)
-        logger.error("Job %s failed: %s", context.job_id, message)
+        self._repository.update_status(job_id, update)
+        logger.error("Job %s failed: %s", job_id, message)
 
     # ------------------------------------------------------------------
     # Helpers
