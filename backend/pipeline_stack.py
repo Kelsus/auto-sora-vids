@@ -159,7 +159,7 @@ class VideoAutomationStack(Stack):
                 "STAGE": stage,
             },
             layers=[shared_layer],
-            bundling=function_bundling,
+            bundling=ingest_bundling,
         )
         jobs_table.grant_write_data(ingest_lambda)
 
