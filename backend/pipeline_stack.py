@@ -169,7 +169,7 @@ class VideoAutomationStack(Stack):
             rest_api_name="Video Automation Jobs",
             api_key_source_type=apigateway.ApiKeySourceType.HEADER,
             default_cors_preflight_options=apigateway.CorsOptions(
-                allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+                allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
                 allow_origins=apigateway.Cors.ALL_ORIGINS,
                 allow_headers=["*"],
             ),
