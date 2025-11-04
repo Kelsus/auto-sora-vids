@@ -22,9 +22,17 @@ def pytest_configure(config) -> None:  # pragma: no cover - pytest hook
     if src_path.exists() and str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
 
-    shared_path = root / "infra" / "lambda_src" / "common_layer" / "python"
-    if str(shared_path) not in sys.path:
-        sys.path.insert(0, str(shared_path))
+    lambda_src_path = root / "backend" / "lambda_src"
+    if lambda_src_path.exists() and str(lambda_src_path) not in sys.path:
+        sys.path.insert(0, str(lambda_src_path))
+
+    shared_paths = [
+        root / "infra" / "lambda_src" / "common_layer" / "python",
+        root / "backend" / "lambda_src" / "common_layer" / "python",
+    ]
+    for shared_path in shared_paths:
+        if shared_path.exists() and str(shared_path) not in sys.path:
+            sys.path.insert(0, str(shared_path))
     if "boto3" not in sys.modules:
         boto3_stub = _StubBoto3()
         sys.modules["boto3"] = boto3_stub

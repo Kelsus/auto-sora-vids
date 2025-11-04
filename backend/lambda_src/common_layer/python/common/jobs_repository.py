@@ -177,3 +177,15 @@ class JobsRepository:
         items = response.get("Items", [])
         last_key = response.get("LastEvaluatedKey")
         return items, last_key
+
+    def delete_job(self, job_id: str) -> None:
+        try:
+            self._table.delete_item(
+                Key={"jobId": job_id},
+                ConditionExpression="attribute_exists(jobId)",
+            )
+        except ClientError as exc:  # pragma: no cover
+            error_code = exc.response.get("Error", {}).get("Code")
+            if error_code == "ConditionalCheckFailedException":
+                raise JobNotFoundError(f"Job '{job_id}' not found") from exc
+            raise RepositoryError("Failed to delete job") from exc

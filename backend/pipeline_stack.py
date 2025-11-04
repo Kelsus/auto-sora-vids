@@ -277,7 +277,31 @@ class VideoAutomationStack(Stack):
             apigateway.LambdaIntegration(job_update_lambda),
             api_key_required=True,
         )
-        
+
+        job_delete_lambda = lambda_python.PythonFunction(
+            self,
+            "JobDeleteLambda",
+            entry=str(lambda_src),
+            index="job_delete/handler.py",
+            handler="handler",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={
+                "JOBS_TABLE_NAME": jobs_table.table_name,
+                "STAGE": stage,
+            },
+            layers=[shared_layer],
+            bundling=function_bundling,
+        )
+        jobs_table.grant_write_data(job_delete_lambda)
+
+        job_resource.add_method(
+            "DELETE",
+            apigateway.LambdaIntegration(job_delete_lambda),
+            api_key_required=True,
+        )
+
         usage_plan = api.add_usage_plan(
             "VideoJobsUsagePlan",
             name=f"video-automation-{stage}",

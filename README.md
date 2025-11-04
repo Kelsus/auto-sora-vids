@@ -168,6 +168,24 @@ Jobs transition `PENDING → QUEUED → RUNNING → COMPLETED/FAILED` automatica
 
 The optional `pipeline_config` map mirrors the fields in `PipelineConfig`; any keys you include are applied only to that job. Set `pipeline_config.drive_folder` to the name of a subfolder beneath the configured Drive root (`GDRIVE_FOLDER_ID`) when you want the Google Drive forwarder to drop the final MP4 into that location for the job.
 
+Fetch, update, or delete existing jobs:
+```bash
+# Retrieve metadata
+curl -X GET "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jobId>" \
+  -H "x-api-key: $AUTO_SORA_API_KEY"
+
+# Apply partial updates (fields optional)
+curl -X PATCH "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jobId>" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $AUTO_SORA_API_KEY" \
+  -d '{"status": "RUNNING"}'
+
+# Remove a job that is no longer needed
+curl -X DELETE "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jobId>" \
+  -H "x-api-key: $AUTO_SORA_API_KEY"
+```
+The delete endpoint returns HTTP 204 when a record is removed and 404 if the `jobId` is missing.
+
 ## Development Status (captions branch)
 - Karaoke captions (ASS/SSA) with per-word highlighting are implemented and burned via ffmpeg/libass when ElevenLabs alignment is available.
 - See `docs/TODO.md` for current tasks and next steps on caption styling/configuration and alternate timestamp sources (WhisperX/AssemblyAI).

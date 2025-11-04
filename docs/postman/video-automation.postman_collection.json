@@ -148,6 +148,34 @@
         "description": "Updates allowed fields (`status`, `job_type`, `pipeline_config`, `scheduled_datetime`) for an existing job. Omit fields you do not wish to change."
       },
       "response": []
+    },
+    {
+      "name": "Delete Job",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{api_key}}"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{api_base_url}}/jobs/{{job_id}}",
+          "host": [
+            "{{api_base_url}}"
+          ],
+          "path": [
+            "jobs",
+            "{{job_id}}"
+          ]
+        },
+        "description": "Deletes a job permanently. Responds with HTTP 204 when the job is removed or 404 if the jobId does not exist."
+      },
+      "response": []
     }
   ],
   "event": [
