@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -12,6 +12,10 @@ from .time_utils import utc_now_iso
 
 class RepositoryError(RuntimeError):
     """Raised when a persistence operation cannot be completed."""
+
+
+class JobNotFoundError(RepositoryError):
+    """Raised when a job is missing during an update/delete operation."""
 
 
 @dataclass
@@ -131,3 +135,45 @@ class JobsRepository:
             )
         except ClientError as exc:  # pragma: no cover
             raise RepositoryError("Failed to update job status") from exc
+
+    def update_fields(
+        self,
+        job_id: str,
+        set_parts: List[str],
+        attribute_names: Dict[str, str],
+        attribute_values: Dict[str, Any],
+        remove_parts: Optional[List[str]] = None,
+    ) -> None:
+        if not set_parts:
+            raise ValueError("set_parts must not be empty")
+
+        expression = "SET " + ", ".join(set_parts)
+        if remove_parts:
+            expression += " REMOVE " + ", ".join(remove_parts)
+
+        try:
+            self._table.update_item(
+                Key={"jobId": job_id},
+                UpdateExpression=expression,
+                ExpressionAttributeNames=attribute_names,
+                ExpressionAttributeValues=attribute_values,
+                ConditionExpression="attribute_exists(jobId)",
+            )
+        except ClientError as exc:  # pragma: no cover
+            error_code = exc.response.get("Error", {}).get("Code")
+            if error_code == "ConditionalCheckFailedException":
+                raise JobNotFoundError(f"Job '{job_id}' not found") from exc
+            raise RepositoryError("Failed to update job") from exc
+
+    def list_jobs(
+        self,
+        limit: int,
+        exclusive_start_key: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        kwargs: Dict[str, Any] = {"Limit": limit}
+        if exclusive_start_key:
+            kwargs["ExclusiveStartKey"] = exclusive_start_key
+        response = self._table.scan(**kwargs)
+        items = response.get("Items", [])
+        last_key = response.get("LastEvaluatedKey")
+        return items, last_key
