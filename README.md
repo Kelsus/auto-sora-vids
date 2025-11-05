@@ -180,6 +180,12 @@ curl -X PATCH "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jo
   -H "x-api-key: $AUTO_SORA_API_KEY" \
   -d '{"status": "RUNNING"}'
 
+# Cancel a queued or running job (also stops the Step Functions execution)
+curl -X PATCH "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jobId>" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $AUTO_SORA_API_KEY" \
+  -d '{"status": "CANCELED"}'
+
 # Remove a job that is no longer needed
 curl -X DELETE "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jobId>" \
   -H "x-api-key: $AUTO_SORA_API_KEY"

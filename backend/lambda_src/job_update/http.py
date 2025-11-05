@@ -47,6 +47,10 @@ def not_found(job_id: str) -> Dict[str, Any]:
     return HttpResponse(status_code=404, body={"message": f"Job '{job_id}' not found"}).to_payload()
 
 
+def conflict(message: str) -> Dict[str, Any]:
+    return HttpResponse(status_code=409, body={"message": message}).to_payload()
+
+
 def server_error(message: str) -> Dict[str, Any]:
     return HttpResponse(status_code=500, body={"message": message}).to_payload()
 

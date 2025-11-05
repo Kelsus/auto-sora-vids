@@ -11,6 +11,7 @@ from aws_cdk import (
     Stack,
     Tags,
     CfnOutput,
+    ArnFormat,
     aws_cloudwatch as cloudwatch,
     aws_cloudwatch_actions as cloudwatch_actions,
     aws_apigateway as apigateway,
@@ -28,6 +29,7 @@ from aws_cdk import (
     aws_stepfunctions as sfn,
     aws_stepfunctions_tasks as tasks,
     aws_sqs as sqs,
+    aws_iam as iam,
 )
 from constructs import Construct
 
@@ -692,6 +694,26 @@ class VideoAutomationStack(Stack):
             definition=workflow_definition,
             timeout=Duration.hours(2),
         )
+        job_update_lambda.add_environment("STATE_MACHINE_ARN", state_machine.state_machine_arn)
+        state_machine.grant(
+            job_update_lambda,
+            "states:StopExecution",
+            "states:DescribeExecution",
+            "states:ListExecutions",
+        )
+        job_update_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["states:StopExecution", "states:DescribeExecution"],
+                resources=[
+                    Stack.of(self).format_arn(
+                        service="states",
+                        resource="execution",
+                        resource_name=f"{state_machine.state_machine_name}:*",
+                        arn_format=ArnFormat.COLON_RESOURCE_NAME,
+                    )
+                ],
+            )
+        )
 
         dispatcher_lambda = lambda_python.PythonFunction(
             self,
@@ -704,12 +726,14 @@ class VideoAutomationStack(Stack):
             memory_size=256,
             environment={
                 "STATE_MACHINE_ARN": state_machine.state_machine_arn,
+                "JOBS_TABLE_NAME": jobs_table.table_name,
                 "STAGE": stage,
             },
             layers=[shared_layer],
             bundling=function_bundling,
         )
         dispatch_queue.grant_consume_messages(dispatcher_lambda)
+        jobs_table.grant_read_write_data(dispatcher_lambda)
         dispatcher_lambda.add_event_source(
             lambda_event_sources.SqsEventSource(
                 dispatch_queue,

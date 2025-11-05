@@ -17,7 +17,7 @@ class ExecutionLauncher:
     def __post_init__(self) -> None:
         self._client = boto3.client("stepfunctions")
 
-    def start_execution(self, job: ScheduledJob) -> None:
+    def start_execution(self, job: ScheduledJob) -> str:
         execution_name = self._execution_name(job.job_id)
         payload = {
             "jobId": job.job_id,
@@ -26,11 +26,12 @@ class ExecutionLauncher:
             "metadata": job.metadata,
             "jobType": job.job_type,
         }
-        self._client.start_execution(
+        response = self._client.start_execution(
             stateMachineArn=self.state_machine_arn,
             name=execution_name,
             input=json.dumps(payload),
         )
+        return response["executionArn"]
 
     def _execution_name(self, job_id: str) -> str:
         suffix = uuid.uuid4().hex[:8]

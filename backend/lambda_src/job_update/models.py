@@ -8,6 +8,7 @@ from common.time_utils import ensure_utc
 
 
 ALLOWED_FIELDS = {"status", "job_type", "pipeline_config", "scheduled_datetime"}
+ALLOWED_STATUSES = {"PENDING", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELED"}
 
 
 @dataclass(frozen=True)
@@ -35,8 +36,8 @@ class JobUpdatePayload:
         if extra_keys:
             raise ValueError(f"Unsupported field(s): {', '.join(sorted(extra_keys))}")
 
-        status = cls._parse_optional_string(data, "status") if "status" in provided else None
-        job_type = cls._parse_optional_string(data, "job_type") if "job_type" in provided else None
+        status = cls._parse_status(data) if "status" in provided else None
+        job_type = cls._parse_optional_string(data, "job_type").upper() if "job_type" in provided else None
         pipeline_config = cls._parse_pipeline_config(data, provided)
         scheduled_datetime = cls._parse_scheduled_datetime(data) if "scheduled_datetime" in provided else None
 
@@ -54,6 +55,17 @@ class JobUpdatePayload:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{field} must be a non-empty string")
         return value.strip()
+
+    @staticmethod
+    def _parse_status(data: Dict[str, Any]) -> str:
+        raw = data.get("status")
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError("status must be a non-empty string")
+        status = raw.strip().upper()
+        if status not in ALLOWED_STATUSES:
+            allowed = ", ".join(sorted(ALLOWED_STATUSES))
+            raise ValueError(f"status must be one of {allowed}")
+        return status
 
     @staticmethod
     def _parse_pipeline_config(data: Dict[str, Any], provided: Set[str]) -> Dict[str, Any] | None:

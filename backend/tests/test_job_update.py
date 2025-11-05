@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-
-import json
 
 import pytest
 
 from common import RepositoryError
 from common.jobs_repository import JobNotFoundError
 from job_update.app import JobUpdateApplication
+from job_update.cancellation import CancellationError, InvalidCancellationState
 from job_update.models import JobUpdatePayload
 from job_update.store import JobDoesNotExist, JobUpdateStore, UpdateError
 
@@ -24,6 +25,19 @@ class StubStore:
     def update_job(self, job_id: str, payload: JobUpdatePayload) -> dict[str, Any]:
         self.job_id = job_id
         self.payload = payload
+        if self.error:
+            raise self.error
+        return self.response
+
+
+class StubCancellationService:
+    def __init__(self, response: Optional[dict[str, Any]] = None, error: Exception | None = None) -> None:
+        self.response = response or {"jobId": "abc", "status": "CANCELED"}
+        self.error = error
+        self.job_id: Optional[str] = None
+
+    def cancel(self, job_id: str) -> dict[str, Any]:
+        self.job_id = job_id
         if self.error:
             raise self.error
         return self.response
@@ -61,6 +75,90 @@ def test_returns_bad_request_when_no_fields(monkeypatch: pytest.MonkeyPatch) -> 
     response = app.handle_event(event)
 
     assert response["statusCode"] == 400
+
+
+def test_cancel_job_updates_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    cancel_service = StubCancellationService(response={"jobId": "abc", "status": "CANCELED"})
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = JobUpdateApplication(store=store, cancellation_service=cancel_service)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "canceled"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 200
+    assert cancel_service.job_id == "abc"
+    assert store.job_id is None
+
+
+def test_cancel_job_with_extra_fields_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    cancel_service = StubCancellationService()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = JobUpdateApplication(store=store, cancellation_service=cancel_service)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "CANCELED", "job_type": "IMMEDIATE"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 400
+    assert cancel_service.job_id is None
+
+
+def test_cancel_job_handles_invalid_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    cancel_service = StubCancellationService(error=InvalidCancellationState("Cannot cancel job"))
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = JobUpdateApplication(store=store, cancellation_service=cancel_service)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "CANCELED"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 409
+
+
+def test_cancel_job_handles_cancellation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    cancel_service = StubCancellationService(error=CancellationError("boom"))
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = JobUpdateApplication(store=store, cancellation_service=cancel_service)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "CANCELED"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 500
+
+
+def test_cancel_job_when_service_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    if "STATE_MACHINE_ARN" in os.environ:
+        monkeypatch.delenv("STATE_MACHINE_ARN", raising=False)
+    app = JobUpdateApplication(store=store, cancellation_service=None)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "CANCELED"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 500
 
 
 def test_returns_not_found_when_job_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -200,3 +298,18 @@ def test_store_wraps_repository_errors(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(UpdateError):
         store.update_job("abc", payload)
+
+
+def test_payload_normalizes_status() -> None:
+    payload = JobUpdatePayload.from_dict({"status": "canceled"})
+    assert payload.status == "CANCELED"
+
+
+def test_payload_rejects_unknown_status() -> None:
+    with pytest.raises(ValueError):
+        JobUpdatePayload.from_dict({"status": "paused"})
+
+
+def test_payload_uppercases_job_type() -> None:
+    payload = JobUpdatePayload.from_dict({"job_type": "immediate"})
+    assert payload.job_type == "IMMEDIATE"

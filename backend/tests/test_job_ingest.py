@@ -108,6 +108,17 @@ def test_job_request_allows_immediate_without_schedule():
     now = datetime.now(timezone.utc)
     assert now >= job.scheduled_datetime
     assert (now - job.scheduled_datetime).total_seconds() < 5
+    assert job.job_id == "example-com-story"
+
+
+def test_job_request_accepts_canceled_status():
+    payload = {
+        "url": "https://example.com/story",
+        "scheduled_datetime": "2024-08-12T18:00:00Z",
+        "status": "canceled",
+    }
+    job = JobRequest.from_payload(payload)
+    assert job.status == "CANCELED"
 
 
 def test_ingest_application_creates_job(monkeypatch):

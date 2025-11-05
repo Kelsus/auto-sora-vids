@@ -370,6 +370,7 @@ class PipelineWorkflow:
                 "output_prefix": context.output_prefix,
                 "captions_ass_key": None,
                 "error_message": None,
+                "current_execution_arn": None,
             }
             if final_video_key:
                 attributes["final_video_key"] = final_video_key
@@ -429,6 +430,7 @@ class PipelineWorkflow:
         }
         if final_video_key:
             attributes["final_video_key"] = final_video_key
+        attributes["current_execution_arn"] = None
         self._repository.update_status(
             context.job_id,
             JobStatusUpdate(status="COMPLETED", attributes=attributes),
@@ -467,7 +469,13 @@ class PipelineWorkflow:
         if not job_id:
             raise ValueError("Mark failed requires job context or metadata with job id")
 
-        update = JobStatusUpdate(status="FAILED", attributes={"error_message": message})
+        update = JobStatusUpdate(
+            status="FAILED",
+            attributes={
+                "error_message": message,
+                "current_execution_arn": None,
+            },
+        )
         self._repository.update_status(job_id, update)
         logger.error("Job %s failed: %s", job_id, message)
 
@@ -488,6 +496,7 @@ class PipelineWorkflow:
         self._bundle_store.save(context.bundle_key, updated_bundle)
         self._storage.upload_directory(run_dir, context.output_prefix)
 
+        clip_identifier = getattr(clip_result, "clip_id", Path(clip_path).stem)
         if isinstance(relative_clip, Path):
             log_clip = relative_clip.as_posix()
         else:
@@ -495,11 +504,11 @@ class PipelineWorkflow:
 
         logger.info(
             "Uploaded clip %s for job %s at %s",
-            clip_result.clip_id,
+            clip_identifier,
             context.job_id,
             log_clip,
         )
-        return {"clipId": clip_result.clip_id}
+        return {"clipId": clip_identifier}
 
     def _bundle_has_clip(self, bundle: PipelineBundle, clip_id: str) -> bool:
         for asset in bundle.sora_assets:

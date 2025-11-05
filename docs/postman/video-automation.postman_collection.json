@@ -145,7 +145,7 @@
             "{{job_id}}"
           ]
         },
-        "description": "Updates allowed fields (`status`, `job_type`, `pipeline_config`, `scheduled_datetime`) for an existing job. Omit fields you do not wish to change."
+        "description": "Updates allowed fields (`status`, `job_type`, `pipeline_config`, `scheduled_datetime`) for an existing job. Omit fields you do not wish to change. Set `status` to `CANCELED` to stop an in-flight job."
       },
       "response": []
     },
