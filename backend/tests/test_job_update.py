@@ -43,10 +43,89 @@ class StubCancellationService:
         return self.response
 
 
+class StubRepository:
+    def __init__(
+        self,
+        item: Optional[dict[str, Any]] = None,
+        error: Exception | None = None,
+        update_error: Exception | None = None,
+    ) -> None:
+        self.item = item
+        self.error = error
+        self.update_error = update_error
+        self.requested: list[str] = []
+        self.updates: list[tuple[str, str, Dict[str, Any]]] = []
+
+    def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
+        self.requested.append(job_id)
+        if self.error:
+            raise self.error
+        if self.item and self.item.get("jobId") == job_id:
+            return dict(self.item)
+        return None
+
+    def update_status(self, job_id: str, status: str, attributes: Dict[str, Any]) -> None:
+        if self.update_error:
+            raise self.update_error
+        self.updates.append((job_id, status, attributes))
+        record = dict(self.item) if self.item and self.item.get("jobId") == job_id else {"jobId": job_id}
+        record["status"] = status
+        for key, value in attributes.items():
+            if value is None:
+                record.pop(key, None)
+            else:
+                record[key] = value
+        self.item = record
+
+
+class StubPaginator:
+    def __init__(self, pages: list[dict[str, Any]]) -> None:
+        self.pages = pages
+        self.kwargs: list[dict[str, Any]] = []
+
+    def paginate(self, **kwargs):
+        self.kwargs.append(kwargs)
+        for page in self.pages:
+            yield page
+
+
+class StubS3Client:
+    def __init__(self, pages: Optional[list[dict[str, Any]]] = None, should_fail: bool = False) -> None:
+        self.pages = pages or []
+        self.deleted: list[dict[str, Any]] = []
+        self.should_fail = should_fail
+
+    def get_paginator(self, name: str) -> StubPaginator:
+        assert name == "list_objects_v2"
+        return StubPaginator(self.pages)
+
+    def delete_objects(self, **kwargs) -> None:
+        if self.should_fail:
+            raise RuntimeError("delete failed")
+        self.deleted.append(kwargs)
+
+
+def build_app(
+    store: StubStore,
+    *,
+    cancel_service: StubCancellationService | None = None,
+    repository: StubRepository | None = None,
+    s3_client: StubS3Client | None = None,
+) -> JobUpdateApplication:
+    repository = repository or StubRepository()
+    s3_client = s3_client or StubS3Client()
+    return JobUpdateApplication(
+        store=store,
+        cancellation_service=cancel_service,
+        repository=repository,
+        s3_client=s3_client,
+    )
+
+
 def test_updates_job(monkeypatch: pytest.MonkeyPatch) -> None:
     store = StubStore(response={"jobId": "abc", "status": "RUNNING"})
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = JobUpdateApplication(store=store)
+    app = build_app(store)
 
     event = {
         "httpMethod": "PATCH",
@@ -65,7 +144,7 @@ def test_updates_job(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_returns_bad_request_when_no_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     store = StubStore()
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = JobUpdateApplication(store=store)
+    app = build_app(store)
 
     event = {
         "httpMethod": "PATCH",
@@ -81,7 +160,7 @@ def test_cancel_job_updates_status(monkeypatch: pytest.MonkeyPatch) -> None:
     store = StubStore()
     cancel_service = StubCancellationService(response={"jobId": "abc", "status": "CANCELED"})
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = JobUpdateApplication(store=store, cancellation_service=cancel_service)
+    app = build_app(store, cancel_service=cancel_service)
 
     event = {
         "httpMethod": "PATCH",
@@ -99,7 +178,7 @@ def test_cancel_job_with_extra_fields_is_rejected(monkeypatch: pytest.MonkeyPatc
     store = StubStore()
     cancel_service = StubCancellationService()
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = JobUpdateApplication(store=store, cancellation_service=cancel_service)
+    app = build_app(store, cancel_service=cancel_service)
 
     event = {
         "httpMethod": "PATCH",
@@ -116,7 +195,7 @@ def test_cancel_job_handles_invalid_state(monkeypatch: pytest.MonkeyPatch) -> No
     store = StubStore()
     cancel_service = StubCancellationService(error=InvalidCancellationState("Cannot cancel job"))
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = JobUpdateApplication(store=store, cancellation_service=cancel_service)
+    app = build_app(store, cancel_service=cancel_service)
 
     event = {
         "httpMethod": "PATCH",
@@ -132,7 +211,7 @@ def test_cancel_job_handles_cancellation_error(monkeypatch: pytest.MonkeyPatch) 
     store = StubStore()
     cancel_service = StubCancellationService(error=CancellationError("boom"))
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = JobUpdateApplication(store=store, cancellation_service=cancel_service)
+    app = build_app(store, cancel_service=cancel_service)
 
     event = {
         "httpMethod": "PATCH",
@@ -149,7 +228,7 @@ def test_cancel_job_when_service_not_configured(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
     if "STATE_MACHINE_ARN" in os.environ:
         monkeypatch.delenv("STATE_MACHINE_ARN", raising=False)
-    app = JobUpdateApplication(store=store, cancellation_service=None)
+    app = build_app(store, cancel_service=None)
 
     event = {
         "httpMethod": "PATCH",
@@ -204,6 +283,177 @@ def test_handles_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     response = app.handle_event(event)
 
     assert response["statusCode"] == 204
+
+
+def test_completed_to_pending_deletes_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore(response={"jobId": "abc", "status": "PENDING"})
+    job = {
+        "jobId": "abc",
+        "status": "COMPLETED",
+        "output_bucket": "media-bucket",
+        "output_prefix": "jobs/abc/",
+        "final_video_key": "jobs/final/abc.mp4",
+    }
+    repository = StubRepository(item=job)
+    s3 = StubS3Client(pages=[{"Contents": [{"Key": "jobs/abc/run/file1"}]}])
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository, s3_client=s3)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "PENDING"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 200
+    assert s3.deleted  # prefix and key deletions attempted
+    assert repository.requested == ["abc"]
+
+
+def test_failed_to_pending_deletes_artifacts_when_flag_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore(response={"jobId": "abc", "status": "PENDING"})
+    job = {
+        "jobId": "abc",
+        "status": "FAILED",
+        "output_bucket": "media-bucket",
+        "output_prefix": "jobs/abc/",
+    }
+    repository = StubRepository(item=job)
+    s3 = StubS3Client(pages=[{"Contents": [{"Key": "jobs/abc/run/file1"}]}])
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository, s3_client=s3)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "PENDING", "delete_artifacts": True}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 200
+    assert s3.deleted  # cleanup performed
+
+
+def test_failed_to_pending_skips_artifact_deletion_when_flag_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore(response={"jobId": "abc", "status": "PENDING"})
+    job = {
+        "jobId": "abc",
+        "status": "FAILED",
+        "output_bucket": "media-bucket",
+    }
+    repository = StubRepository(item=job)
+    s3 = StubS3Client()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository, s3_client=s3)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "PENDING", "delete_artifacts": False}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 200
+    assert s3.deleted == []
+
+
+def test_delete_artifacts_without_pending_status_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    repository = StubRepository()
+    s3 = StubS3Client()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository, s3_client=s3)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"delete_artifacts": True}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 400
+    assert store.job_id is None
+
+
+def test_pending_transition_with_invalid_previous_state_returns_bad_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    job = {"jobId": "abc", "status": "RUNNING", "output_bucket": "media-bucket"}
+    repository = StubRepository(item=job)
+    s3 = StubS3Client()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository, s3_client=s3)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "PENDING", "delete_artifacts": True}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 400
+    assert store.job_id is None
+    assert s3.deleted == []
+
+
+def test_pending_transition_missing_job_returns_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    repository = StubRepository(item=None)
+    s3 = StubS3Client()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository, s3_client=s3)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "PENDING"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 404
+    assert store.job_id is None
+
+
+def test_pending_transition_repository_failure_returns_server_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    repository = StubRepository(error=RepositoryError("boom"))
+    s3 = StubS3Client()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository, s3_client=s3)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "PENDING"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 500
+    assert store.job_id is None
+
+
+def test_pending_transition_artifact_cleanup_failure_returns_server_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    job = {
+        "jobId": "abc",
+        "status": "COMPLETED",
+        "output_bucket": "media-bucket",
+        "final_video_key": "jobs/final/abc.mp4",
+    }
+    repository = StubRepository(item=job)
+    s3 = StubS3Client(should_fail=True)
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository, s3_client=s3)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"status": "PENDING"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 500
+    assert store.job_id is None
 
 
 class FakeRepository:
@@ -313,3 +563,8 @@ def test_payload_rejects_unknown_status() -> None:
 def test_payload_uppercases_job_type() -> None:
     payload = JobUpdatePayload.from_dict({"job_type": "immediate"})
     assert payload.job_type == "IMMEDIATE"
+
+
+def test_payload_rejects_non_boolean_delete_artifacts() -> None:
+    with pytest.raises(ValueError):
+        JobUpdatePayload.from_dict({"status": "PENDING", "delete_artifacts": "yes"})

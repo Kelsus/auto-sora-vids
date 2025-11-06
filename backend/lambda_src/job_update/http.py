@@ -8,6 +8,7 @@ from typing import Any, Dict
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "PATCH,OPTIONS",
 }
 
 
@@ -29,7 +30,6 @@ def cors_preflight_response() -> Dict[str, Any]:
         "statusCode": 204,
         "headers": {
             **_CORS_HEADERS,
-            "Access-Control-Allow-Methods": "PATCH,OPTIONS",
         },
         "body": "",
     }

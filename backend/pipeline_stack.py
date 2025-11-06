@@ -273,6 +273,7 @@ class VideoAutomationStack(Stack):
             bundling=function_bundling,
         )
         jobs_table.grant_read_write_data(job_update_lambda)
+        output_bucket.grant_read_write(job_update_lambda)
 
         job_resource.add_method(
             "PATCH",
@@ -297,6 +298,7 @@ class VideoAutomationStack(Stack):
             bundling=function_bundling,
         )
         jobs_table.grant_write_data(job_delete_lambda)
+        output_bucket.grant_read_write(job_delete_lambda)
 
         job_resource.add_method(
             "DELETE",

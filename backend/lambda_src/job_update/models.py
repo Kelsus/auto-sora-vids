@@ -7,7 +7,7 @@ from typing import Any, Dict, Set
 from common.time_utils import ensure_utc
 
 
-ALLOWED_FIELDS = {"status", "job_type", "pipeline_config", "scheduled_datetime"}
+ALLOWED_FIELDS = {"status", "job_type", "pipeline_config", "scheduled_datetime", "delete_artifacts"}
 ALLOWED_STATUSES = {"PENDING", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELED"}
 
 
@@ -17,6 +17,7 @@ class JobUpdatePayload:
     job_type: str | None
     pipeline_config: Dict[str, Any] | None
     scheduled_datetime: datetime | None
+    delete_artifacts: bool | None
     _provided: Set[str]
 
     @classmethod
@@ -31,7 +32,6 @@ class JobUpdatePayload:
                 raise ValueError(f"Unsupported field(s): {', '.join(sorted(unexpected))}")
             raise ValueError("Request must include at least one updatable field")
 
-        unexpected = provided.symmetric_difference(set(data.keys()))
         extra_keys = set(data.keys()) - ALLOWED_FIELDS
         if extra_keys:
             raise ValueError(f"Unsupported field(s): {', '.join(sorted(extra_keys))}")
@@ -40,12 +40,14 @@ class JobUpdatePayload:
         job_type = cls._parse_optional_string(data, "job_type").upper() if "job_type" in provided else None
         pipeline_config = cls._parse_pipeline_config(data, provided)
         scheduled_datetime = cls._parse_scheduled_datetime(data) if "scheduled_datetime" in provided else None
+        delete_artifacts = cls._parse_delete_artifacts(data) if "delete_artifacts" in provided else None
 
         return cls(
             status=status,
             job_type=job_type,
             pipeline_config=pipeline_config,
             scheduled_datetime=scheduled_datetime,
+            delete_artifacts=delete_artifacts,
             _provided=provided,
         )
 
@@ -94,3 +96,10 @@ class JobUpdatePayload:
 
     def is_provided(self, field_name: str) -> bool:
         return field_name in self._provided
+
+    @staticmethod
+    def _parse_delete_artifacts(data: Dict[str, Any]) -> bool:
+        value = data.get("delete_artifacts")
+        if isinstance(value, bool):
+            return value
+        raise ValueError("delete_artifacts must be a boolean when provided")

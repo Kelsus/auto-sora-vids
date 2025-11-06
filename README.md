@@ -186,11 +186,21 @@ curl -X PATCH "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jo
   -H "x-api-key: $AUTO_SORA_API_KEY" \
   -d '{"status": "CANCELED"}'
 
+# Reset a failed job to pending and optionally purge its artifacts
+curl -X PATCH "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jobId>" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $AUTO_SORA_API_KEY" \
+  -d '{"status": "PENDING", "delete_artifacts": true}'
+
 # Remove a job that is no longer needed
 curl -X DELETE "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jobId>" \
   -H "x-api-key: $AUTO_SORA_API_KEY"
+
+# Remove a job and delete its stored artifacts
+curl -X DELETE "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jobId>?delete_artifacts=true" \
+  -H "x-api-key: $AUTO_SORA_API_KEY"
 ```
-The delete endpoint returns HTTP 204 when a record is removed and 404 if the `jobId` is missing.
+When transitioning a job from `COMPLETED` back to `PENDING`, the API automatically removes the job's S3 artifacts. Jobs in `FAILED` status require the `delete_artifacts` flag shown above if you also want their artifacts cleared. The delete endpoint returns HTTP 204 when a record is removed and 404 if the `jobId` is missing; include the `delete_artifacts=true` query parameter to purge S3 objects at the same time.
 
 ## Development Status (captions branch)
 - Karaoke captions (ASS/SSA) with per-word highlighting are implemented and burned via ffmpeg/libass when ElevenLabs alignment is available.

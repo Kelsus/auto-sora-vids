@@ -128,7 +128,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"status\": \"RUNNING\",\n  \"job_type\": \"IMMEDIATE\",\n  \"pipeline_config\": {\n    \"drive_folder\": \"Editorial\"\n  },\n  \"scheduled_datetime\": \"2025-10-18T10:00:00Z\"\n}",
+          "raw": "{\n  \"status\": \"PENDING\",\n  \"delete_artifacts\": true,\n  \"pipeline_config\": {\n    \"drive_folder\": \"Editorial\"\n  }\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -145,7 +145,7 @@
             "{{job_id}}"
           ]
         },
-        "description": "Updates allowed fields (`status`, `job_type`, `pipeline_config`, `scheduled_datetime`) for an existing job. Omit fields you do not wish to change. Set `status` to `CANCELED` to stop an in-flight job."
+        "description": "Updates allowed fields (`status`, `job_type`, `pipeline_config`, `scheduled_datetime`) for an existing job. Omit fields you do not wish to change. Set `status` to `CANCELED` to stop an in-flight job. When resetting a job to `PENDING`, artifacts are deleted automatically if the previous status was `COMPLETED`; include `delete_artifacts=true` when retrying from `FAILED` and you also want to purge S3 outputs."
       },
       "response": []
     },
@@ -171,9 +171,17 @@
           "path": [
             "jobs",
             "{{job_id}}"
+          ],
+          "query": [
+            {
+              "key": "delete_artifacts",
+              "value": "true",
+              "description": "Set to true to delete S3 artifacts before removing the job.",
+              "disabled": true
+            }
           ]
         },
-        "description": "Deletes a job permanently. Responds with HTTP 204 when the job is removed or 404 if the jobId does not exist."
+        "description": "Deletes a job permanently. Responds with HTTP 204 when the job is removed or 404 if the jobId does not exist. Toggle the optional `delete_artifacts` query parameter to remove stored S3 artifacts along with the DynamoDB record."
       },
       "response": []
     }
