@@ -1,19 +1,12 @@
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Any, Optional
 
 import pytest
 
 from common import RepositoryError
-from job_list.app import JobListApplication
-from job_list.repository import (
-    InvalidCursor,
-    JobListStore,
-    ListError,
-    ListResult,
-    _encode_cursor,
-)
+from job_list.app import DEFAULT_LIMIT, JobListApplication
+from job_list.repository import InvalidCursor, JobListStore, ListError, ListResult, _encode_cursor
 
 
 class StubStore:
@@ -22,8 +15,8 @@ class StubStore:
         self._error = error
         self.args: dict[str, Any] | None = None
 
-    def list_jobs(self, *, limit: int, cursor: str | None) -> ListResult:
-        self.args = {"limit": limit, "cursor": cursor}
+    def list_jobs(self, *, limit: int, cursor: str | None, status: str | None) -> ListResult:
+        self.args = {"limit": limit, "cursor": cursor, "status": status}
         if self._error:
             raise self._error
         return self._result
@@ -49,7 +42,19 @@ def test_returns_paginated_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert response["statusCode"] == 200
     assert response["body"] == '{"items": [{"jobId": "a"}, {"jobId": "b"}], "nextCursor": "next"}'
-    assert store.args == {"limit": 10, "cursor": None}
+    assert store.args == {"limit": 10, "cursor": None, "status": None}
+
+
+def test_accepts_status_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = ListResult(items=[], next_cursor=None)
+    store = StubStore(result=result)
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = JobListApplication(store=store)
+
+    response = app.handle_event(_build_event(params={"status": "completed"}))
+
+    assert response["statusCode"] == 200
+    assert store.args == {"limit": DEFAULT_LIMIT, "cursor": None, "status": "COMPLETED"}
 
 
 def test_returns_bad_request_for_invalid_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,45 +98,70 @@ def test_handles_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class RecordingRepository:
-    def __init__(self, items: list[dict[str, Any]], last_key: Optional[dict[str, Any]]) -> None:
-        self._items = items
-        self._last_key = last_key
-        self.last_limit: Optional[int] = None
-        self.last_cursor: Optional[dict[str, Any]] = None
+    def __init__(
+        self,
+        responses: list[tuple[list[dict[str, Any]], Optional[dict[str, Any]]]],
+        status_responses: Optional[list[tuple[list[dict[str, Any]], Optional[dict[str, Any]]]]] = None,
+    ) -> None:
+        self._responses = responses
+        self._status_responses = status_responses or []
+        self.calls: list[dict[str, Any]] = []
+        self.status_calls: list[dict[str, Any]] = []
 
     def list_jobs(
         self,
         limit: int,
         exclusive_start_key: Optional[dict[str, Any]] = None,
     ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
-        self.last_limit = limit
-        self.last_cursor = exclusive_start_key
-        return self._items, self._last_key
+        self.calls.append({"limit": limit, "cursor": exclusive_start_key})
+        if not self._responses:
+            return [], None
+        return self._responses.pop(0)
+
+    def list_jobs_by_status(
+        self,
+        status: str,
+        limit: int,
+        exclusive_start_key: Optional[dict[str, Any]] = None,
+    ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
+        self.status_calls.append({"status": status, "limit": limit, "cursor": exclusive_start_key})
+        if not self._status_responses:
+            return [], None
+        return self._status_responses.pop(0)
 
 
 def test_store_returns_encoded_cursor() -> None:
     repo = RecordingRepository(
-        items=[{"jobId": "abc", "attempts": Decimal("2")}],
-        last_key={"jobId": "def", "attempts": Decimal("3")},
+        responses=[
+            (
+                [
+                    {"jobId": "abc", "created_at": "2025-01-03T08:00:00+00:00", "pk2": "JOB"},
+                    {"jobId": "def", "created_at": "2025-01-02T10:00:00+00:00", "pk2": "JOB"},
+                ],
+                {"jobId": "def", "created_at": "2025-01-02T10:00:00+00:00", "pk2": "JOB"},
+            ),
+            (
+                [{"jobId": "ghi", "created_at": "2025-01-01T09:00:00+00:00", "pk2": "JOB"}],
+                None,
+            ),
+        ]
     )
     store = JobListStore("jobs", repository=repo)  # type: ignore[arg-type]
 
-    result = store.list_jobs(limit=5, cursor=None)
+    result = store.list_jobs(limit=5, cursor=None, status=None)
 
-    assert repo.last_limit == 5
-    assert repo.last_cursor is None
-    assert result.items == [{"jobId": "abc", "attempts": 2}]
+    assert [item["jobId"] for item in result.items] == ["abc", "def"]
     assert result.next_cursor is not None
 
-    repo_roundtrip = RecordingRepository(items=[], last_key=None)
-    store_roundtrip = JobListStore("jobs", repository=repo_roundtrip)  # type: ignore[arg-type]
-    store_roundtrip.list_jobs(limit=1, cursor=result.next_cursor)
+    next_result = store.list_jobs(limit=5, cursor=result.next_cursor, status=None)
 
-    assert repo_roundtrip.last_cursor == {"jobId": "def", "attempts": Decimal("3")}
+    assert [item["jobId"] for item in next_result.items] == ["ghi"]
+    assert next_result.next_cursor is None
+    assert repo.calls[1]["cursor"] == {"jobId": "def", "created_at": "2025-01-02T10:00:00+00:00", "pk2": "JOB"}
 
 
 def test_store_raises_on_repository_error() -> None:
-    class ErrorRepository(RecordingRepository):
+    class ErrorRepository:
         def list_jobs(
             self,
             limit: int,
@@ -139,11 +169,65 @@ def test_store_raises_on_repository_error() -> None:
         ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
             raise RepositoryError("boom")
 
-    store = JobListStore("jobs", repository=ErrorRepository([], None))  # type: ignore[arg-type]
+    store = JobListStore("jobs", repository=ErrorRepository())  # type: ignore[arg-type]
 
     with pytest.raises(ListError):
-        store.list_jobs(limit=10, cursor=None)
+        store.list_jobs(limit=10, cursor=None, status=None)
 
 
-def test_encode_cursor_handles_none() -> None:
-    assert _encode_cursor(None) is None
+def test_store_uses_status_index_when_filter_provided() -> None:
+    repo = RecordingRepository(
+        responses=[],
+        status_responses=[
+            (
+                [
+                    {"jobId": "xyz", "status": "FAILED", "created_at": "2025-01-04T12:00:00+00:00"},
+                    {"jobId": "uvw", "status": "FAILED", "created_at": "2025-01-03T08:00:00+00:00"},
+                ],
+                {"jobId": "uvw", "status": "FAILED", "created_at": "2025-01-03T08:00:00+00:00"},
+            )
+        ],
+    )
+    store = JobListStore("jobs", repository=repo)  # type: ignore[arg-type]
+
+    result = store.list_jobs(limit=10, cursor=None, status="FAILED")
+
+    assert repo.calls == []
+    assert len(repo.status_calls) == 1
+    assert repo.status_calls[0]["status"] == "FAILED"
+    assert [item["jobId"] for item in result.items] == ["xyz", "uvw"]
+def test_store_rejects_cursor_mismatch_for_status_filter() -> None:
+    repo = RecordingRepository(
+        responses=[],
+        status_responses=[
+            (
+                [{"jobId": "a", "status": "FAILED", "created_at": "2025-01-02T10:00:00+00:00"}],
+                None,
+            )
+        ],
+    )
+    store = JobListStore("jobs", repository=repo)  # type: ignore[arg-type]
+
+    cursor = _encode_cursor({"pk2": "JOB", "jobId": "abc", "created_at": "2025-01-02T10:00:00+00:00"})
+
+    with pytest.raises(InvalidCursor):
+        store.list_jobs(limit=5, cursor=cursor, status="FAILED")
+
+
+def test_store_rejects_cursor_without_status_when_filtering() -> None:
+    repo = RecordingRepository(
+        responses=[],
+        status_responses=[
+            (
+                [{"jobId": "a", "status": "FAILED", "created_at": "2025-01-02T10:00:00+00:00"}],
+                None,
+            )
+        ],
+    )
+    store = JobListStore("jobs", repository=repo)  # type: ignore[arg-type]
+
+    cursor_payload = {"jobId": "abc", "created_at": "2025-01-02T10:00:00+00:00"}
+    cursor = _encode_cursor(cursor_payload)
+
+    with pytest.raises(InvalidCursor):
+        store.list_jobs(limit=5, cursor=cursor, status="FAILED")

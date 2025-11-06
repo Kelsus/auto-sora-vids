@@ -174,6 +174,14 @@ Fetch, update, or delete existing jobs:
 curl -X GET "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jobId>" \
   -H "x-api-key: $AUTO_SORA_API_KEY"
 
+# List recent jobs (newest first)
+curl -X GET "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs?limit=20" \
+  -H "x-api-key: $AUTO_SORA_API_KEY"
+
+# List failed jobs only
+curl -X GET "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs?status=FAILED&limit=20" \
+  -H "x-api-key: $AUTO_SORA_API_KEY"
+
 # Apply partial updates (fields optional)
 curl -X PATCH "https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs/<jobId>" \
   -H "Content-Type: application/json" \

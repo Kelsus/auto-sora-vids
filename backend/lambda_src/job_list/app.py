@@ -35,8 +35,12 @@ class JobListApplication:
 
         cursor = params.get("cursor")
 
+        status_filter = None
+        if params.get("status"):
+            status_filter = params["status"].strip().upper()
+
         try:
-            result = self._store.list_jobs(limit=limit, cursor=cursor)
+            result = self._store.list_jobs(limit=limit, cursor=cursor, status=status_filter)
         except InvalidCursor as exc:
             return bad_request(str(exc))
         except ListError:

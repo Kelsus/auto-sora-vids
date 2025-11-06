@@ -21,6 +21,7 @@ class JobRecord:
     def to_item(self) -> dict[str, Any]:
         return {
             "jobId": self.job_id,
+            "pk2": "JOB",
             "url": self.url,
             "scheduled_datetime": serialize_datetime(self.scheduled_datetime),
             "job_type": self.job_type,

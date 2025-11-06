@@ -28,13 +28,17 @@ class JobListStore:
     def __init__(self, table_name: str, repository: JobsRepository | None = None) -> None:
         self._repository = repository or JobsRepository(table_name)
 
-    def list_jobs(self, limit: int, cursor: str | None) -> ListResult:
+    def list_jobs(self, limit: int, cursor: str | None, status: str | None) -> ListResult:
         exclusive_start_key = None
         if cursor:
             exclusive_start_key = _decode_cursor(cursor)
+            self._validate_cursor(exclusive_start_key, status)
 
         try:
-            items, last_key = self._repository.list_jobs(limit, exclusive_start_key)
+            if status:
+                items, last_key = self._repository.list_jobs_by_status(status, limit, exclusive_start_key)
+            else:
+                items, last_key = self._repository.list_jobs(limit, exclusive_start_key)
         except RepositoryError as exc:
             raise ListError(str(exc)) from exc
 
@@ -42,6 +46,18 @@ class JobListStore:
         next_cursor = _encode_cursor(last_key) if last_key else None
 
         return ListResult(items=normalized_items, next_cursor=next_cursor)
+
+    @staticmethod
+    def _validate_cursor(key: Dict[str, Any], status: str | None) -> None:
+        if status:
+            cursor_status = key.get("status")
+            if cursor_status != status:
+                raise InvalidCursor("Cursor does not match requested status")
+            if "created_at" not in key:
+                raise InvalidCursor("Cursor missing created_at for status query")
+        else:
+            if key.get("pk2") != "JOB":
+                raise InvalidCursor("Cursor is not compatible with unfiltered listing")
 
 
 def _encode_cursor(key: Optional[Dict[str, Any]]) -> str | None:

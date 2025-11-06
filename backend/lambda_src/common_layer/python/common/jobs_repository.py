@@ -21,6 +21,8 @@ class JobNotFoundError(RepositoryError):
 @dataclass
 class JobsRepository:
     table_name: str
+    CREATED_AT_INDEX = "pk2-created_at-index"
+    STATUS_CREATED_AT_INDEX = "status-created_at-index"
 
     def __post_init__(self) -> None:
         self._table = boto3.resource("dynamodb").Table(self.table_name)
@@ -170,10 +172,37 @@ class JobsRepository:
         limit: int,
         exclusive_start_key: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
-        kwargs: Dict[str, Any] = {"Limit": limit}
+        kwargs: Dict[str, Any] = {
+            "IndexName": self.CREATED_AT_INDEX,
+            "KeyConditionExpression": Key("pk2").eq("JOB"),
+            "Limit": limit,
+            "ScanIndexForward": False,
+        }
         if exclusive_start_key:
             kwargs["ExclusiveStartKey"] = exclusive_start_key
-        response = self._table.scan(**kwargs)
+        response = self._table.query(**kwargs)
+        items = response.get("Items", [])
+        last_key = response.get("LastEvaluatedKey")
+        return items, last_key
+
+    def list_jobs_by_status(
+        self,
+        status: str,
+        limit: int,
+        exclusive_start_key: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        kwargs: Dict[str, Any] = {
+            "IndexName": self.STATUS_CREATED_AT_INDEX,
+            "KeyConditionExpression": Key("status").eq(status),
+            "Limit": limit,
+            "ScanIndexForward": False,
+        }
+        if exclusive_start_key:
+            kwargs["ExclusiveStartKey"] = exclusive_start_key
+        try:
+            response = self._table.query(**kwargs)
+        except ClientError as exc:  # pragma: no cover - boto3 runtime
+            raise RepositoryError("Failed to list jobs by status") from exc
         items = response.get("Items", [])
         last_key = response.get("LastEvaluatedKey")
         return items, last_key

@@ -68,6 +68,30 @@ class VideoAutomationStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
         )
+        jobs_table.add_global_secondary_index(
+            index_name="pk2-created_at-index",
+            partition_key=dynamodb.Attribute(
+                name="pk2",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            sort_key=dynamodb.Attribute(
+                name="created_at",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+        jobs_table.add_global_secondary_index(
+            index_name="status-created_at-index",
+            partition_key=dynamodb.Attribute(
+                name="status",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            sort_key=dynamodb.Attribute(
+                name="created_at",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
 
         output_bucket = s3.Bucket(
             self,
