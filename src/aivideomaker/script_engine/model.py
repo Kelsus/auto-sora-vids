@@ -56,6 +56,9 @@ class ScriptPlan(BaseModel):
     withheld_context: str
     final_reveal: str
     social_caption: Optional["SocialCaption"] = None
+    target_runtime_sec: Optional[float] = None
+    target_beat_count: Optional[int] = None
+    narrative_style: Optional[str] = None
 
     @computed_field
     @property

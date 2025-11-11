@@ -19,16 +19,21 @@ class JobRecord:
     updated_at: datetime
 
     def to_item(self) -> dict[str, Any]:
+        created_iso = serialize_datetime(self.created_at)
+        updated_iso = serialize_datetime(self.updated_at)
         return {
             "jobId": self.job_id,
             "pk2": "JOB",
             "url": self.url,
+            "pk2": "JOB",
             "scheduled_datetime": serialize_datetime(self.scheduled_datetime),
             "job_type": self.job_type,
             "status": self.status,
             "metadata": dict(self.metadata),
-            "created_at": serialize_datetime(self.created_at),
-            "updated_at": serialize_datetime(self.updated_at),
+            "createdAt": created_iso,
+            "created_at": created_iso,
+            "updatedAt": updated_iso,
+            "updated_at": updated_iso,
         }
 
 

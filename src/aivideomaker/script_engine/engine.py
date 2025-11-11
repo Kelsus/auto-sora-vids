@@ -7,6 +7,13 @@ from pydantic import ValidationError
 
 from aivideomaker.article_ingest.model import ArticleBundle
 
+from .directives import (
+    NarrativeStyleDirective,
+    VideoLengthProfile,
+    apply_profile_to_script,
+    get_length_profile,
+    get_style_directive,
+)
 from .llm import EchoLLM, LLMClient
 from .model import ScriptPlan
 from .prompts import render_planning_prompt
@@ -28,12 +35,19 @@ class ScriptEngine:
         review: "ScriptReviewDecision | None" = None,
         previous_script: ScriptPlan | None = None,
         chart_outline: str | None = None,
+        *,
+        style_directive: NarrativeStyleDirective | None = None,
+        length_profile: VideoLengthProfile | None = None,
     ) -> ScriptPlan:
+        directive = style_directive or get_style_directive(None)
+        profile = length_profile or get_length_profile(None)
         prompt = render_planning_prompt(
             article,
             review=review,
             previous_script=previous_script,
             chart_outline=chart_outline,
+            style_directive=directive,
+            length_profile=profile,
         )
         raw = self.llm.complete(prompt)
         logger.debug("LLM raw response: %s", raw)
@@ -54,7 +68,8 @@ class ScriptEngine:
                 beat["estimated_duration_sec"] = round(fallback, 2)
 
         try:
-            return ScriptPlan.model_validate(payload)
+            script = ScriptPlan.model_validate(payload)
         except ValidationError as exc:
             logger.error("Invalid script plan payload: %s", exc)
             raise
+        return apply_profile_to_script(script, directive, profile)

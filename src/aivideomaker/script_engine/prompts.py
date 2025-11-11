@@ -6,6 +6,12 @@ from typing import TYPE_CHECKING
 
 from aivideomaker.article_ingest.model import ArticleBundle
 from .model import ScriptPlan
+from .directives import (
+    NarrativeStyleDirective,
+    VideoLengthProfile,
+    get_length_profile,
+    get_style_directive,
+)
 
 if TYPE_CHECKING:
     from .reviewer import ScriptReviewDecision
@@ -16,6 +22,8 @@ SCRIPT_PLANNING_PROMPT = dedent(
     You are an investigative video script writer. Turn the provided article into a suspenseful narrative
     that hooks the viewer by foregrounding the controversy and withholding context as long as possible,
     without becoming misleading.
+
+{style_block}
 
     Before drafting, articulate the article's central thesis in one sentence and list the top three fresh facts,
     quotes, or data points that prove it (including any specific numbers, time horizons, or stakeholder stances).
@@ -40,10 +48,13 @@ SCRIPT_PLANNING_PROMPT = dedent(
     Give the viewer a clear path back to the source—mention the article's outlet or lead researchers once, and nod to
     any additional data providers when you call out their numbers. Keep it conversational; no formal footnotes needed.
 
-    The narration must stay tight: aim for roughly 90 seconds of voiceover (~190 spoken words total).
-    Structure the story in exactly 6 beats, each about 12-15 seconds, and include an "estimated_duration_sec"
-    for every beat so the sum is <= 90 seconds. If the article is long, condense aggressively—drop details
-    rather than drifting past the timebox or adding extra beats.
+    The narration must stay tight: aim for roughly {target_runtime_sec} seconds of voiceover (~{approx_words} spoken words total).
+    Structure the story in exactly {target_beat_count} beats, each about {min_beat_sec}-{max_beat_sec} seconds, and include an "estimated_duration_sec"
+    for every beat so the sum is <= {target_runtime_sec} seconds. If the article is long, condense aggressively—drop details
+    rather than drifting past the timebox or adding extra beats. If the LLM drifts, you may be post-processed, so stay within the guardrails.
+
+Runtime + pacing guardrails:
+{runtime_block}
 
     Use escalating beats that move from surface signals into the diagnostic evidence. Sprinkle in concrete
     data points (inventories, freight indices, hiring stats, expected payback windows, etc.) that support the tension.
@@ -133,10 +144,18 @@ def render_planning_prompt(
     review: "ScriptReviewDecision | None" = None,
     previous_script: ScriptPlan | None = None,
     chart_outline: str | None = None,
+    *,
+    style_directive: NarrativeStyleDirective | None = None,
+    length_profile: VideoLengthProfile | None = None,
 ) -> str:
     article = bundle.article
     excerpt = article.text[:excerpt_chars]
     revision_context_block = _build_revision_context_block(review, previous_script)
+    directive = style_directive or get_style_directive(None)
+    profile = length_profile or get_length_profile(None)
+    style_block = indent(directive.prompt_block(), "    ")
+    runtime_block = indent(profile.runtime_block(), "    ")
+    approx_words = int(profile.target_runtime_sec * 2.1)
     chart_brief_block = ""
     if chart_outline:
         chart_brief_block = "Recommended charts (use each at most once, only when the beat’s narration references the same data):\n" + indent(chart_outline, "    ") + "\n"
@@ -148,6 +167,13 @@ def render_planning_prompt(
         excerpt=excerpt,
         revision_context_block=revision_context_block,
         chart_brief_block=chart_brief_block,
+        style_block=style_block,
+        runtime_block=runtime_block,
+        target_runtime_sec=int(profile.target_runtime_sec),
+        approx_words=approx_words,
+        target_beat_count=profile.target_beat_count,
+        min_beat_sec=f"{profile.min_beat_duration_sec:.0f}",
+        max_beat_sec=f"{profile.max_beat_duration_sec:.0f}",
     )
 
 

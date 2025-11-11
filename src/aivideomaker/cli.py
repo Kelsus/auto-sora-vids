@@ -8,7 +8,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .orchestrator import PipelineBundle, PipelineOrchestrator, ScriptRejectedError
+from .orchestrator import PipelineBundle, PipelineConfig, PipelineOrchestrator, ScriptRejectedError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,6 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip media submission and only stitch existing assets",
     )
+    parser.add_argument(
+        "--video-length",
+        choices=["15s", "30s", "60s", "90s"],
+        help="Target runtime preset for the generated video",
+    )
+    parser.add_argument(
+        "--video-style",
+        choices=["docu_reveal", "how_to", "listicle", "first_person"],
+        help="Narrative style preset for the script planning prompt",
+    )
     return parser
 
 
@@ -66,11 +76,16 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    orchestrator = (
-        PipelineOrchestrator.from_file(args.config)
-        if args.config
-        else PipelineOrchestrator.default()
-    )
+    config = PipelineConfig.from_file(args.config) if args.config else PipelineConfig()
+    overrides: dict[str, object] = {}
+    if args.video_length:
+        overrides["video_length"] = args.video_length
+    if args.video_style:
+        overrides["video_style"] = args.video_style
+    if overrides:
+        config = config.model_copy(update=overrides)
+
+    orchestrator = PipelineOrchestrator.default(config)
 
     if args.prompt_bundle:
         payload = json.loads(args.prompt_bundle.read_text(encoding="utf-8"))

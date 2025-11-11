@@ -1,5 +1,20 @@
 # TODO (captions branch)
 
+## Video length & style integration
+- [x] **Plumb metadata from jobs → pipeline**
+  - [x] Accept `pipeline_config.video_length` / `pipeline_config.video_style` (plus CLI flags) and surface them in `PipelineConfig` / `PipelineRunner` so `ScriptEngine` can read the operator’s choice.
+  - [x] Normalize the four length presets (15/30/60/90s) into `target_runtime_sec`, `target_beat_count`, and per-beat duration guards; default to the existing 90s/6-beat profile when unset.
+- [x] **Prompt templating**
+  - [x] Refactor `SCRIPT_PLANNING_PROMPT` (src/aivideomaker/script_engine/prompts.py) to accept a `NarrativeStyleDirective` struct describing tone + structural rules.
+  - [x] Implement directives for: docu-reveal (current behavior), how-to (stepwise instructional voice, capture procedural steps), and list (enumerated listicle tone, ensure every list item in the article is represented).
+  - [x] Inject the runtime/beat guardrails dynamically so the LLM is explicitly told how many beats/seconds to aim for per style.
+- [x] **Post-processing + chunker alignment**
+  - [x] Extend `ScriptPlan` (model.py) or a companion metadata object to record the requested runtime/style so downstream planners can react—e.g., adjust beat pacing, chunk count, and chart assignments.
+  - [x] After `ScriptPlan` validation, rescale `estimated_duration_sec` to the requested runtime if the LLM drifts, and ensure beat count matches the target profile (auto-trim or reflow when necessary).
+- [x] **Docs + tests**
+  - [x] Document the new options in README + docs/configuration.md, including how serverless jobs should pass them via `pipeline_config` and the CLI flags for local runs.
+  - [x] Add unit tests for the prompt directive builder + duration normalizer, plus regression coverage that a 15s/how-to request produces fewer beats and an instructional tone.
+
 Status: Karaoke ASS captions implemented and integrated.
 
 Recent changes

@@ -64,6 +64,12 @@ src/aivideomaker/
    ```
    That variant stops after prompt generation and simply writes the JSON bundle for inspection.
 
+   Need a quicker or punchier edit? Pass the runtime and style presets directly:
+   ```bash
+   aivideo "https://example.com/news/article" --video-length 30s --video-style how_to
+   ```
+   `--video-length` accepts `15s`, `30s`, `60s`, or `90s`. `--video-style` accepts `docu_reveal`, `how_to`, `listicle`, or `first_person` (for first-person narrative essays/newsletters).
+
 Once satisfied with the prompts, you can render them later from the saved JSON bundle:
    ```bash
    aivideo --prompt-bundle data/runs/example-article/bundle.json --dry-run   # placeholder artifacts
@@ -93,7 +99,9 @@ You can supply a JSON or YAML config to override the data root, voice, or Claude
   "llm_provider": "claude",
   "llm_model": "claude-sonnet-4-5",
   "anthropic_api_key_env": "ANTHROPIC_API_KEY",
-  "sora_api_key_env": "OPENAI_API_KEY"
+  "sora_api_key_env": "OPENAI_API_KEY",
+  "video_length": "90s",
+  "video_style": "docu_reveal"
 }
 ```
 Run with:
@@ -160,7 +168,9 @@ curl -X POST https://<api-id>.execute-api.<region>.amazonaws.com/prod/jobs \
         "pipeline_config": {
           "drive_folder": "Kelsus" | "Korsair" | "SearchClick",
           "media_provider": "veo",
-          "veo_aspect_ratio": "1:1"
+          "veo_aspect_ratio": "1:1",
+          "video_length": "30s",
+          "video_style": "how_to"
         }
       }'
 ```

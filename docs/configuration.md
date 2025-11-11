@@ -54,7 +54,9 @@ available options and provides a sample configuration you can copy to
   "veo_project": "your-gcp-project",
   "veo_location": "us-central1",
   "veo_credentials_path": null,
-  "veo_credentials_parameter": "/auto-sora/veo-service-account"
+  "veo_credentials_parameter": "/auto-sora/veo-service-account",
+  "video_length": "90s",
+  "video_style": "docu_reveal"
 }
 ```
 
@@ -70,6 +72,7 @@ available options and provides a sample configuration you can copy to
 - **`use_music`, `music_api_key_env`, `music_*`** – Toggle and configure ElevenLabs Music output.
 - **`use_real_sora`, `sora_*`** – Turn on real Sora rendering and set OpenAI credentials, polling cadence, timeout, and size.
 - **`veo_*`** – Settings for Google Veo (Gemini) rendering, including Vertex AI authentication. For managed environments, store the service-account JSON in AWS Systems Manager Parameter Store and set `veo_credentials_parameter` (or the corresponding environment override) to the secure parameter name. `veo_credentials_path` remains useful for local experimentation when a file on disk is more convenient.
+- **`video_length` / `video_style`** – Runtime + narrative presets that enforce beat counts, per-beat guards, and tone (same values exposed on the CLI `--video-length` / `--video-style`). Accepted lengths: `15s`, `30s`, `60s`, `90s`. Styles: `docu_reveal`, `how_to`, `listicle`, `first_person`.
 
 You can mix and match these options—for example, keep `media_provider` as `"sora"`
 but disable `use_music` while still generating narration. Store the configuration

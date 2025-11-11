@@ -88,7 +88,7 @@ class JobsRepository:
         try:
             self._table.update_item(
                 Key={"jobId": job_id},
-                UpdateExpression="SET #s = :new_status, updated_at = :now",
+                UpdateExpression="SET #s = :new_status, updatedAt = :now, updated_at = :now",
                 ConditionExpression="#s = :expected",
                 ExpressionAttributeNames={"#s": "status"},
                 ExpressionAttributeValues={
@@ -106,7 +106,7 @@ class JobsRepository:
 
     def update_status(self, job_id: str, status: str, attributes: Dict[str, Any]) -> None:
         now_iso = utc_now_iso()
-        set_parts = ["#s = :status", "updated_at = :now"]
+        set_parts = ["#s = :status", "updatedAt = :now", "updated_at = :now"]
         remove_names: List[str] = []
         attribute_names: Dict[str, str] = {"#s": "status"}
         attribute_values: Dict[str, Any] = {":status": status, ":now": now_iso}

@@ -6,7 +6,7 @@ import os
 import shutil
 import sys
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple, Optional
@@ -24,6 +24,12 @@ from aivideomaker.prompt_builder.model import MediaPrompt, MediaPromptBundle
 from aivideomaker.script_engine.engine import ScriptEngine
 from aivideomaker.script_engine.llm import ClaudeLLM, EchoLLM, LLMClient
 from aivideomaker.script_engine.model import Beat, BeatQCRules, BeatVisualSpec, ScriptPlan, SocialCaption
+from aivideomaker.script_engine.directives import (
+    NarrativeStyleDirective,
+    VideoLengthProfile,
+    get_length_profile,
+    get_style_directive,
+)
 from aivideomaker.script_engine.utils import load_json_with_repair
 from aivideomaker.script_engine.reviewer import ScriptReviewDecision, ScriptReviewer
 from aivideomaker.media_pipeline.chart_renderer import ChartRenderer
@@ -194,6 +200,8 @@ class PipelineConfig(BaseModel):
     openai_chart_model: str = "gpt-5"
     openai_api_key_env: str = "OPENAI_API_KEY"
     openai_assistant_id: Optional[str] = None
+    video_length: str = "90s"
+    video_style: str = "docu_reveal"
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineConfig":
@@ -223,6 +231,12 @@ class PipelineConfig(BaseModel):
             return ClaudeLLM(client=client, model=self.llm_model)
         logger.warning("⚠️  Unknown llm_provider '%s'; falling back to EchoLLM", provider)
         return EchoLLM()
+
+    def resolve_length_profile(self) -> VideoLengthProfile:
+        return get_length_profile(self.video_length)
+
+    def resolve_style_directive(self) -> NarrativeStyleDirective:
+        return get_style_directive(self.video_style)
 
 
 class PipelineBundle(BaseModel):
@@ -280,6 +294,8 @@ class PipelineOrchestrator:
     llm: Optional[LLMClient] = None
     chart_planner: Optional[ChartPlanner] = None
     chart_assigner: Optional[ChartAssigner] = None
+    length_profile: VideoLengthProfile = field(default_factory=lambda: get_length_profile(None))
+    style_directive: NarrativeStyleDirective = field(default_factory=lambda: get_style_directive(None))
 
 
     @classmethod
@@ -292,6 +308,8 @@ class PipelineOrchestrator:
         config = config or PipelineConfig()
         data_root = config.data_root
         placeholder_root = data_root / ".placeholder"
+        length_profile = config.resolve_length_profile()
+        style_directive = config.resolve_style_directive()
 
         provider = config.media_provider.lower()
         if provider == "sora":
@@ -438,6 +456,8 @@ class PipelineOrchestrator:
             llm=llm_client,
             chart_planner=chart_planner,
             chart_assigner=chart_assigner,
+            length_profile=length_profile,
+            style_directive=style_directive,
         )
         return orchestrator
 
@@ -862,6 +882,8 @@ class PipelineOrchestrator:
                 review=pending_review_feedback,
                 previous_script=previous_script_attempt if pending_review_feedback else None,
                 chart_outline=chart_outline,
+                style_directive=self.style_directive,
+                length_profile=self.length_profile,
             )
 
             review_decision = None
