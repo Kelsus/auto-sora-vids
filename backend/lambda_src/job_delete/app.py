@@ -26,12 +26,16 @@ class JobDeleteApplication:
         s3_client: Any | None = None,
     ) -> None:
         table_name = os.environ["JOBS_TABLE_NAME"]
-        self._repository = repository or JobsRepository(table_name)
+        self._table_name = table_name
+        self._repository = repository
         if store is not None:
             self._store = store
         else:
-            self._store = JobDeleteStore(table_name, repository=self._repository)
-        self._s3 = s3_client or boto3.client("s3")
+            self._store = JobDeleteStore(
+                table_name,
+                repository=self._ensure_repository(),
+            )
+        self._s3 = s3_client
 
     def handle_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Job delete event received")
@@ -49,7 +53,8 @@ class JobDeleteApplication:
 
         if delete_artifacts:
             try:
-                job_item = self._repository.get_job(job_id)
+                repository = self._ensure_repository()
+                job_item = repository.get_job(job_id)
             except RepositoryError:
                 logger.exception("Failed to load job metadata for %s", job_id)
                 return server_error("Failed to load job")
@@ -58,8 +63,9 @@ class JobDeleteApplication:
                 return not_found(job_id)
 
             normalized = normalize_dynamodb_value(job_item)
+            s3_client = self._ensure_s3_client()
             try:
-                delete_job_artifacts(normalized, self._s3, logger=logger)
+                delete_job_artifacts(normalized, s3_client, logger=logger)
             except ArtifactCleanupError:
                 logger.exception("Failed to delete artifacts for job %s", job_id)
                 return server_error("Failed to delete job artifacts")
@@ -98,6 +104,16 @@ class JobDeleteApplication:
             if normalized in {"false", "0", "no"}:
                 return False
         raise ValueError("delete_artifacts must be a boolean query parameter")
+
+    def _ensure_repository(self) -> JobsRepository:
+        if self._repository is None:
+            self._repository = JobsRepository(self._table_name)
+        return self._repository
+
+    def _ensure_s3_client(self):
+        if self._s3 is None:
+            self._s3 = boto3.client("s3")
+        return self._s3
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:  # pragma: no cover - AWS entry

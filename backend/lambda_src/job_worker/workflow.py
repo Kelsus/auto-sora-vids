@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import shutil
 import subprocess
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -12,6 +13,7 @@ from imageio_ffmpeg import get_ffmpeg_exe
 
 from aivideomaker.captions.ass_builder import write_karaoke_ass
 from aivideomaker.orchestrator import PipelineBundle
+from aivideomaker.script_engine.reviewer import ScriptReviewDecision
 from aivideomaker.media_pipeline.sora_client import SoraClient, SoraJobError
 
 from job_worker.bundle_store import BundleStore
@@ -47,12 +49,20 @@ class PipelineWorkflow:
 
     def generate_prompts(self, metadata: JobMetadata, dry_run: bool | None = None) -> JobContext:
         dry_run_value = self._resolve_dry_run(dry_run)
-        pipeline_overrides = metadata.pipeline_config or {}
+        pipeline_overrides = dict(metadata.pipeline_config or {})
+        metadata_payload = dict(metadata.metadata or {})
+        if "pause_after_prompts" not in pipeline_overrides:
+            pipeline_overrides["pause_after_prompts"] = True
         resume_key = pipeline_overrides.get("resume_from_bundle")
+        review_feedback_entry = metadata_payload.get("review_feedback") if metadata_payload else None
+        review_decision = self._review_decision_from_entry(review_feedback_entry)
+        human_feedback_present = review_decision is not None
 
         bundle_key_override: str | None = None
         if isinstance(resume_key, str) and resume_key.strip() and resume_key.lower() not in {"true", "false"}:
             bundle_key_override = resume_key.strip()
+
+        auto_revision_required = False
 
         if resume_key:
             target_bundle_key = bundle_key_override or self._settings.bundle_key(metadata.job_id)
@@ -66,9 +76,22 @@ class PipelineWorkflow:
                 clip_ids = [prompt.chunk_id for prompt in bundle.prompts.media_prompts]
         else:
             runner = self._get_runner(pipeline_overrides)
-            prompts_result = runner.run_prompts(metadata.article_url, dry_run=dry_run_value)
+            prompts_result = runner.run_prompts(
+                metadata.article_url,
+                dry_run=dry_run_value,
+                review_feedback=review_decision,
+            )
             bundle = prompts_result.bundle
             clip_ids = prompts_result.clip_ids
+            script_review = getattr(bundle, "script_review", None)
+            script_greenlit = bool(getattr(bundle, "script_greenlit", True))
+            auto_revision_required = bool(script_review and script_review.requires_revision)
+            if not script_greenlit:
+                auto_revision_required = True
+            if human_feedback_present:
+                auto_revision_required = False
+            if auto_revision_required:
+                pipeline_overrides["pause_after_prompts"] = True
 
         bundle_slug = bundle.article.slug
         job_id = metadata.job_id
@@ -85,15 +108,40 @@ class PipelineWorkflow:
         self._bundle_store.save(bundle_key, bundle)
         self._storage.upload_directory(run_dir, output_prefix)
 
-        update = JobStatusUpdate(
-            status="RUNNING",
-            attributes={
-                "output_bucket": self._settings.output_bucket,
-                "output_prefix": output_prefix,
-                "bundle_key": bundle_key,
-            },
+        pause_for_review = self._should_pause_for_review(pipeline_overrides)
+        review_metadata = None
+        if pause_for_review:
+            review_metadata = self._build_review_metadata(
+                bundle=bundle,
+                clip_ids=clip_ids,
+                bundle_key=bundle_key,
+                output_prefix=output_prefix,
+                job_id=job_id,
+                bucket=self._settings.output_bucket,
+            )
+
+        if review_metadata and getattr(bundle, "script_review", None):
+            review_metadata["script_review"] = bundle.script_review.model_dump()
+
+        if human_feedback_present and "review_feedback" in metadata_payload:
+            metadata_payload.pop("review_feedback", None)
+
+        attributes = {
+            "output_bucket": self._settings.output_bucket,
+            "output_prefix": output_prefix,
+            "bundle_key": bundle_key,
+        }
+        attributes["review_metadata"] = (
+            self._sanitize_for_dynamo(review_metadata) if review_metadata is not None else None
         )
-        self._repository.update_status(job_id, update)
+        if metadata_payload:
+            attributes["metadata"] = self._sanitize_for_dynamo(metadata_payload)
+        if pause_for_review:
+            attributes["current_execution_arn"] = None
+        if pause_for_review or auto_revision_required:
+            attributes["error_message"] = None
+        status = "REVISION_REQUESTED" if auto_revision_required else ("REVIEW" if pause_for_review else "RUNNING")
+        self._repository.update_status(job_id, JobStatusUpdate(status=status, attributes=attributes))
 
         context = JobContext(
             job_id=job_id,
@@ -102,7 +150,7 @@ class PipelineWorkflow:
             output_prefix=output_prefix,
             clip_ids=clip_ids,
             dry_run=dry_run_value,
-            pipeline_config=metadata.pipeline_config,
+            pipeline_config=pipeline_overrides,
         )
         logger.info("Prepared prompts for job %s (%d clips)", job_id, len(clip_ids))
         return context
@@ -482,6 +530,174 @@ class PipelineWorkflow:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _should_pause_for_review(pipeline_config: Dict[str, Any]) -> bool:
+        value = pipeline_config.get("pause_after_prompts")
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            return normalized in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @staticmethod
+    def _review_decision_from_entry(entry: Dict[str, Any] | None) -> ScriptReviewDecision | None:
+        if not entry or not isinstance(entry, dict):
+            return None
+
+        action = str(entry.get("action") or "REVISION_REQUESTED").upper()
+        context = entry.get("context") if isinstance(entry.get("context"), dict) else {}
+
+        raw_notes = entry.get("notes")
+        notes = str(raw_notes or context.get("notes") or "").strip()
+        summary = context.get("summary") or notes or f"Human review action: {action}"
+
+        strengths = list(context.get("strengths") or [])
+        if action == "APPROVE" and not strengths:
+            strengths = ["Human reviewer approved previous script."]
+
+        concerns = list(context.get("concerns") or [])
+        if not concerns and notes:
+            concerns = [notes]
+
+        action_items = list(context.get("action_items") or [])
+        if not action_items and concerns:
+            action_items = list(concerns)
+
+        return ScriptReviewDecision(
+            verdict="revise" if action != "APPROVE" else "approve",
+            summary=summary,
+            strengths=strengths,
+            concerns=concerns,
+            action_items=action_items,
+        )
+
+    def _build_review_metadata(
+        self,
+        bundle: PipelineBundle,
+        clip_ids: list[str],
+        bundle_key: str,
+        output_prefix: str,
+        job_id: str,
+        bucket: str,
+    ) -> dict[str, Any]:
+        article_doc = getattr(bundle.article, "article", None)
+        article_meta = getattr(article_doc, "metadata", None) if article_doc else None
+        article_info: dict[str, Any]
+        if article_meta is None:
+            article_info = {
+                "title": getattr(bundle.article, "title", getattr(bundle.article, "slug", None)),
+                "url": None,
+                "source": getattr(bundle.article, "source", None),
+            }
+        else:
+            article_info = {
+                "title": article_meta.title,
+                "url": str(article_meta.url),
+                "source": article_meta.source,
+            }
+        script = bundle.script
+        beats: list[dict[str, Any]] = []
+        beat_iterable = getattr(script, "beats", []) or []
+        for idx, beat in enumerate(beat_iterable, start=1):
+            visual_type = beat.visual.type if beat.visual and beat.visual.type else None
+            visual_macro = beat.visual.macro if beat.visual else None
+            beats.append(
+                {
+                    "index": idx,
+                    "id": beat.id,
+                    "purpose": beat.purpose,
+                    "visual_type": visual_type,
+                    "visual_macro": visual_macro,
+                    "intent": beat.intent,
+                    "suspense_level": beat.suspense_level,
+                    "estimated_duration_sec": beat.estimated_duration_sec,
+                    "audio_mood": beat.audio_mood,
+                    "visual_seed": beat.visual_seed,
+                }
+            )
+
+        narration = {
+            "transcript_path": self._asset_s3_uri(
+                bundle.voice_transcript,
+                output_prefix,
+                job_id,
+                bundle.article.slug,
+                bucket,
+            ),
+            "audio_path": self._asset_s3_uri(
+                bundle.narration_audio,
+                output_prefix,
+                job_id,
+                bundle.article.slug,
+                bucket,
+            ),
+            "alignment_path": self._asset_s3_uri(
+                bundle.narration_alignment,
+                output_prefix,
+                job_id,
+                bundle.article.slug,
+                bucket,
+            ),
+            "has_alignment_payload": bool(bundle.narration_alignment_payload),
+        }
+
+        return {
+            "bundle_key": bundle_key,
+            "output_prefix": output_prefix,
+            "clip_ids": clip_ids,
+            "article": article_info,
+            "script": {
+                "premise": getattr(script, "premise", None),
+                "controversy_summary": getattr(script, "controversy_summary", None),
+                "withheld_context": getattr(script, "withheld_context", None),
+                "final_reveal": getattr(script, "final_reveal", None),
+                "target_runtime_sec": getattr(script, "target_runtime_sec", None),
+                "target_beat_count": getattr(script, "target_beat_count", None),
+                "narrative_style": getattr(script, "narrative_style", None),
+                "beats": beats,
+            },
+            "narration": narration,
+        }
+
+    def _asset_s3_uri(
+        self,
+        asset_path: Path | str | None,
+        output_prefix: str,
+        job_id: str,
+        slug: str,
+        bucket: str,
+    ) -> str | None:
+        if not asset_path:
+            return None
+        path = Path(asset_path)
+        relative = self._relative_asset_path(path, job_id, slug)
+        if not relative:
+            return path.as_posix()
+        key = "/".join(part.strip("/") for part in [output_prefix, relative] if part)
+        return f"s3://{bucket}/{key}"
+
+    def _relative_asset_path(self, path: Path, job_id: str, slug: str) -> str | None:
+        candidates = [
+            self._local_run_dir(job_id),
+            self._settings.data_root / slug,
+            self._settings.data_root,
+        ]
+        for base in candidates:
+            try:
+                relative = path.relative_to(base)
+                return relative.as_posix().lstrip("/")
+            except ValueError:
+                continue
+        return None
+
+    def _sanitize_for_dynamo(self, value: Any):
+        if isinstance(value, float):
+            return Decimal(str(value))
+        if isinstance(value, list):
+            return [self._sanitize_for_dynamo(v) for v in value]
+        if isinstance(value, dict):
+            return {k: self._sanitize_for_dynamo(v) for k, v in value.items()}
+        return value
 
     def _store_clip_result(self, context: JobContext, clip_result: Any) -> Dict[str, Any]:
         updated_bundle = clip_result.bundle

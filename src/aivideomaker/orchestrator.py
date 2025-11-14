@@ -849,6 +849,7 @@ class PipelineOrchestrator:
         dry_run: bool,
         prompts_only: bool,
         cleanup: bool,
+        external_review: ScriptReviewDecision | None = None,
     ) -> PipelineBundle:
         logger.info("📰  Ingesting article: %s", article_url)
         article = self.article_ingestor.ingest(article_url)
@@ -871,7 +872,7 @@ class PipelineOrchestrator:
             chart_plan = ChartPlan(charts=[])
 
         review_decision: ScriptReviewDecision | None = None
-        pending_review_feedback: ScriptReviewDecision | None = None
+        pending_review_feedback: ScriptReviewDecision | None = external_review
         previous_script_attempt: ScriptPlan | None = None
         script_greenlit = not self.config.enable_script_review
         human_approval: bool | None = None
@@ -943,8 +944,7 @@ class PipelineOrchestrator:
 
         script_text = script.full_transcript
         should_prepare_voice = (
-            script_greenlit
-            and self.voice_manager.eleven_client
+            self.voice_manager.eleven_client
             and script_text.strip()
             and not dry_run
             and (not prompts_only or self.config.prepare_voice_during_prompts)
@@ -1089,6 +1089,7 @@ class PipelineOrchestrator:
         *,
         dry_run: bool = True,
         cleanup: bool = False,
+        review_feedback: ScriptReviewDecision | None = None,
     ) -> PromptGenerationResult:
         base_bundle = self._build_initial_bundle(
             article_url=article_url,
@@ -1096,6 +1097,7 @@ class PipelineOrchestrator:
             dry_run=dry_run,
             prompts_only=True,
             cleanup=cleanup,
+            external_review=review_feedback,
         )
         prompt_bundle = self.execute_prompts(
             bundle=base_bundle,

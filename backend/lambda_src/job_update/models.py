@@ -8,7 +8,17 @@ from common.time_utils import ensure_utc
 
 
 ALLOWED_FIELDS = {"status", "job_type", "pipeline_config", "scheduled_datetime", "delete_artifacts"}
-ALLOWED_STATUSES = {"PENDING", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELED"}
+ALLOWED_STATUSES = {
+    "PENDING",
+    "REVIEW",
+    "REVISION_REQUESTED",
+    "REJECTED",
+    "QUEUED",
+    "RUNNING",
+    "COMPLETED",
+    "FAILED",
+    "CANCELED",
+}
 
 
 @dataclass(frozen=True)

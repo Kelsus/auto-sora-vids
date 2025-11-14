@@ -26,13 +26,41 @@ class FakeBundle:
         captions_ass_path: Path | None = None,
         narration_alignment_payload: dict | None = None,
     ):
-        self.article = SimpleNamespace(slug=slug)
+        article_metadata = SimpleNamespace(title=f"Story {slug}", url=f"https://example.com/{slug}", source="example.com")
+        article_document = SimpleNamespace(metadata=article_metadata)
+        self.article = SimpleNamespace(slug=slug, article=article_document)
         self.prompts = SimpleNamespace(media_prompts=[SimpleNamespace(chunk_id=cid) for cid in clip_ids])
         self.sora_assets = sora_assets or []
         self.final_video = final_video
         self.captions_ass_path = captions_ass_path
         self.narration_alignment_payload = narration_alignment_payload
-        self.script = SimpleNamespace(full_transcript="")
+        self.voice_transcript = None
+        self.narration_audio = None
+        self.narration_alignment = None
+        beats = [
+            SimpleNamespace(
+                id=f"beat-{idx}",
+                purpose=f"Purpose {idx}",
+                visual=SimpleNamespace(type="cinematic_broll", macro=None),
+                intent="Intent",
+                suspense_level=3,
+                estimated_duration_sec=6.0,
+                audio_mood=None,
+                visual_seed=None,
+            )
+            for idx, _ in enumerate(clip_ids, start=1)
+        ]
+        self.script = SimpleNamespace(
+            full_transcript="",
+            beats=beats,
+            premise="Sample premise",
+            controversy_summary="Sample controversy",
+            withheld_context="Sample context",
+            final_reveal="Sample reveal",
+            target_runtime_sec=90.0,
+            target_beat_count=len(beats),
+            narrative_style="docu_reveal",
+        )
         self.chunks = SimpleNamespace(chunks=[])
 
     def model_dump(self, mode: str = "json"):
@@ -68,7 +96,7 @@ class StubRunner:
         self.stitch_calls: list[str] = []
         self.bundle = FakeBundle("story", ["clip-1", "clip-2"])
 
-    def run_prompts(self, article_url: str, dry_run: bool):
+    def run_prompts(self, article_url: str, dry_run: bool, review_feedback=None):
         self.prompts_called_with.append(article_url)
         return SimpleNamespace(bundle=self.bundle, clip_ids=[prompt.chunk_id for prompt in self.bundle.prompts.media_prompts])
 
@@ -147,7 +175,11 @@ class RecordingRepository:
         self.updates.append((job_id, update))
         record = self.records.setdefault(job_id, {})
         record["status"] = update.status
-        record.update(update.attributes)
+        for key, value in update.attributes.items():
+            if value is None:
+                record.pop(key, None)
+            else:
+                record[key] = value
         self.records[job_id] = record
 
     def fetch(self, job_id: str):
@@ -188,10 +220,72 @@ def test_generate_prompts_returns_context_and_updates_status(tmp_path):
 
     assert context.job_id == "story"
     assert context.clip_ids == ["clip-1", "clip-2"]
-    assert repo.updates[0][1].status == "RUNNING"
+    assert context.pipeline_config.get("pause_after_prompts") is True
+    assert repo.updates[0][1].status == "REVIEW"
     assert storage.uploaded_dirs
     assert "story" in storage.uploaded_dirs[0][0]
     assert store.saved[settings.bundle_key("story")] is runner.bundle
+
+
+def test_generate_prompts_with_human_feedback_forces_review(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+
+    class DummyDecision:
+        def __init__(self) -> None:
+            self.requires_revision = True
+            self.summary = "auto reviewer flagged issues"
+
+        def model_dump(self) -> dict:
+            return {"summary": self.summary, "verdict": "revise", "concerns": []}
+
+    runner.bundle.script_review = DummyDecision()
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    metadata = JobMetadata(
+        job_id="story",
+        article_url="https://example.com/story",
+        metadata={
+            "review_feedback": {
+                "action": "REDO",
+                "notes": "tighten hook",
+                "context": {"summary": "redo"},
+            }
+        },
+    )
+
+    workflow.generate_prompts(metadata)
+
+    record = repo.fetch("story")
+    assert record["status"] == "REVIEW"
+    assert "review_metadata" in record
+    assert "review_feedback" not in record.get("metadata", {})
+
+
+def test_generate_prompts_sets_review_metadata_when_paused(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    metadata = JobMetadata(
+        job_id="story",
+        article_url="https://example.com/story",
+        pipeline_config={"pause_after_prompts": True},
+    )
+    context = workflow.generate_prompts(metadata)
+
+    assert context.job_id == "story"
+    assert repo.updates[0][1].status == "REVIEW"
+    review_metadata = repo.records["story"].get("review_metadata")
+    assert review_metadata is not None
+    assert review_metadata["bundle_key"] == settings.bundle_key("story")
+    assert len(review_metadata["script"]["beats"]) == len(runner.bundle.script.beats)
 
 
 def test_generate_prompts_includes_pipeline_config_override(tmp_path):
@@ -212,11 +306,14 @@ def test_generate_prompts_includes_pipeline_config_override(tmp_path):
 
     context = workflow.generate_prompts(metadata)
 
-    assert context.pipeline_config == override
+    assert context.pipeline_config["media_provider"] == "veo"
+    assert context.pipeline_config["veo_aspect_ratio"] == "1:1"
+    assert context.pipeline_config.get("pause_after_prompts") is True
     payload = context.to_payload()
-    assert payload["pipelineConfig"] == override
+    assert payload["pipelineConfig"]["pause_after_prompts"] is True
+    assert payload["pipelineConfig"]["media_provider"] == "veo"
     restored = JobContext.from_payload(payload)
-    assert restored.pipeline_config == override
+    assert restored.pipeline_config["pause_after_prompts"] is True
 
 
 def test_render_clip_updates_bundle_and_storage(tmp_path):

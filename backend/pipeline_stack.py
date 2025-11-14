@@ -102,6 +102,13 @@ class VideoAutomationStack(Stack):
             auto_delete_objects=True,
             removal_policy=RemovalPolicy.DESTROY,
         )
+        output_bucket.add_cors_rule(
+            allowed_methods=[s3.HttpMethods.GET, s3.HttpMethods.HEAD],
+            allowed_origins=["*"],
+            allowed_headers=["*"],
+            exposed_headers=["ETag"],
+            max_age=3600,
+        )
 
         shared_layer = lambda_python.PythonLayerVersion(
             self,
@@ -248,6 +255,7 @@ class VideoAutomationStack(Stack):
             bundling=ingest_bundling,
         )
         jobs_table.grant_read_data(job_list_lambda)
+        output_bucket.grant_read(job_list_lambda)
 
         jobs_resource.add_method(
             "GET",
@@ -272,6 +280,7 @@ class VideoAutomationStack(Stack):
             bundling=function_bundling,
         )
         jobs_table.grant_read_data(job_lookup_lambda)
+        output_bucket.grant_read(job_lookup_lambda)
 
         job_resource = jobs_resource.add_resource("{jobId}")
         job_resource.add_method(
@@ -713,7 +722,16 @@ class VideoAutomationStack(Stack):
         )
         generate_captions_task.add_catch(failure_chain, result_path="$.error")
 
-        workflow_definition = initialize_state.next(generate_prompts_task).next(render_clips_map).next(stitch_task).next(generate_captions_task)
+        review_hold_state = sfn.Succeed(self, "AwaitingReview")
+        render_chain = sfn.Chain.start(render_clips_map).next(stitch_task).next(generate_captions_task)
+        review_gate = sfn.Choice(self, "PauseForReview?")
+        review_gate.when(
+            sfn.Condition.boolean_equals("$.jobContext.pipelineConfig.pause_after_prompts", True),
+            review_hold_state,
+        )
+        review_gate.otherwise(render_chain)
+
+        workflow_definition = initialize_state.next(generate_prompts_task).next(review_gate)
         state_machine = sfn.StateMachine(
             self,
             "VideoJobStateMachine",
@@ -727,6 +745,7 @@ class VideoAutomationStack(Stack):
             "states:DescribeExecution",
             "states:ListExecutions",
         )
+        state_machine.grant_start_execution(job_update_lambda)
         job_update_lambda.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["states:StopExecution", "states:DescribeExecution"],

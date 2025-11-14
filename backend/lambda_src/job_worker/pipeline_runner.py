@@ -12,6 +12,7 @@ from aivideomaker.orchestrator import (
     PipelineOrchestrator,
     PromptGenerationResult,
 )
+from aivideomaker.script_engine.reviewer import ScriptReviewDecision
 from aivideomaker.ssm import get_parameter, hydrate_env
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,13 @@ class PipelineRunner:
         self._google_api_key_parameter = google_api_key_parameter
         self._orchestrator: PipelineOrchestrator | None = None
 
-    def run_prompts(self, article_url: str, dry_run: bool) -> PromptGenerationResult:
+    def run_prompts(
+        self,
+        article_url: str,
+        dry_run: bool,
+        *,
+        review_feedback: ScriptReviewDecision | None = None,
+    ) -> PromptGenerationResult:
         orchestrator = self._ensure_orchestrator()
         self._data_root.mkdir(parents=True, exist_ok=True)
         result = orchestrator.generate_prompt_bundle(
@@ -47,6 +54,7 @@ class PipelineRunner:
             output_dir=self._data_root,
             dry_run=dry_run,
             cleanup=True,
+            review_feedback=review_feedback,
         )
         logger.info("Generated prompts for %s", article_url)
         return result

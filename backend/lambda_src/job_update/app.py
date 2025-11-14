@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import boto3
 
@@ -25,6 +25,9 @@ from job_update.store import JobDoesNotExist, JobUpdateStore, UpdateError
 
 from common import JobsRepository, RepositoryError, ArtifactCleanupError, delete_job_artifacts
 from common.dynamodb_utils import normalize_dynamodb_value
+from common.time_utils import utc_now_iso
+from job_scheduler.executor import ExecutionLauncher
+from job_scheduler.models import ScheduledJob
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -55,6 +58,9 @@ class JobUpdateApplication:
             )
         else:
             self._cancellation = None
+        self._execution_launcher: ExecutionLauncher | None = None
+        if state_machine_arn:
+            self._execution_launcher = ExecutionLauncher(state_machine_arn=state_machine_arn)
 
     def handle_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Job update event received")
@@ -70,10 +76,26 @@ class JobUpdateApplication:
         except ValueError as exc:
             return bad_request(str(exc))
 
-        try:
-            payload = JobUpdatePayload.from_dict(payload_dict)
-        except ValueError as exc:
-            return bad_request(str(exc))
+        review_action = None
+        review_notes = None
+        if isinstance(payload_dict, dict):
+            review_action = payload_dict.pop("review_action", None)
+            review_notes = payload_dict.pop("review_notes", None)
+
+        payload: Optional[JobUpdatePayload] = None
+        if payload_dict:
+            try:
+                payload = JobUpdatePayload.from_dict(payload_dict)
+            except ValueError as exc:
+                return bad_request(str(exc))
+        elif not review_action:
+            return bad_request("Request must include at least one updatable field or review_action")
+
+        if review_action:
+            return self._handle_review_action(job_id, str(review_action), review_notes)
+
+        if payload is None:
+            return bad_request("Request must include at least one updatable field")
 
         if payload.delete_artifacts is not None and payload.status != "PENDING":
             return bad_request("delete_artifacts can only be used when setting status to PENDING")
@@ -141,6 +163,142 @@ class JobUpdateApplication:
         if job_id and job_id.strip():
             return job_id.strip()
         return None
+
+    def _handle_review_action(
+        self,
+        job_id: str,
+        action: str,
+        notes: str | None,
+    ) -> Dict[str, Any]:
+        try:
+            raw_job = self._repository.get_job(job_id)
+        except RepositoryError:
+            logger.exception("Failed to load job metadata for %s", job_id)
+            return server_error("Failed to load job")
+
+        if raw_job is None:
+            return not_found(job_id)
+
+        job = normalize_dynamodb_value(raw_job)
+        status = str(job.get("status", "")).upper()
+        allowed_review_states = {"REVIEW", "REVISION_REQUESTED"}
+        normalized_action = action.strip().upper()
+
+        if normalized_action not in {"APPROVE", "REDO", "REJECT"}:
+            return bad_request("review_action must be APPROVE, REDO, or REJECT")
+
+        if normalized_action != "REJECT" and status not in allowed_review_states:
+            return conflict(f"Job {job_id} is not awaiting review (status={status})")
+
+        metadata = dict(job.get("metadata") or {})
+        pipeline_config = dict(metadata.get("pipeline_config") or {})
+        review_log = list(metadata.get("review_log") or [])
+        review_entry = {
+            "action": normalized_action,
+            "notes": notes,
+            "timestamp": utc_now_iso(),
+        }
+
+        next_status = status
+        review_metadata = job.get("review_metadata") or {}
+
+        if normalized_action == "APPROVE":
+            resume_key = review_metadata.get("bundle_key")
+            if not resume_key:
+                return bad_request("Job does not contain bundle metadata required for approval")
+            pipeline_config["resume_from_bundle"] = resume_key
+            pipeline_config["pause_after_prompts"] = False
+            pipeline_config.pop("stop_before_sora", None)
+            pipeline_config.pop("prepare_voice_during_prompts", None)
+            metadata["pipeline_config"] = pipeline_config
+            metadata.pop("review_feedback", None)
+            next_status = "PENDING"
+        elif normalized_action == "REDO":
+            redo_context = self._build_review_context(job, review_metadata)
+            if redo_context:
+                review_entry["context"] = redo_context
+            metadata["review_feedback"] = review_entry
+            pipeline_config["pause_after_prompts"] = True
+            metadata["pipeline_config"] = pipeline_config
+            next_status = "PENDING"
+        else:  # REJECT
+            next_status = "REJECTED"
+
+        metadata["review_log"] = review_log + [review_entry]
+        metadata["latest_review"] = review_entry
+
+        attributes = {
+            "metadata": metadata,
+            "current_execution_arn": None,
+            "error_message": None,
+            "review_metadata": None,
+            "stage": None,
+        }
+        self._repository.update_status(
+            job_id,
+            next_status,
+            attributes,
+        )
+        updated = self._repository.get_job(job_id)
+        if not updated:
+            return server_error("Failed to load updated job")
+        normalized = normalize_dynamodb_value(updated)
+
+        if normalized_action in {"APPROVE", "REDO"}:
+            if self._execution_launcher is None:
+                logger.warning("STATE_MACHINE_ARN not configured; job %s will remain PENDING until scheduler runs.", job_id)
+            else:
+                try:
+                    scheduled_job = ScheduledJob.from_item(normalized)
+                    execution_arn = self._execution_launcher.start_execution(scheduled_job)
+                    self._repository.update_status(
+                        job_id,
+                        "QUEUED",
+                        {
+                            "current_execution_arn": execution_arn,
+                            "metadata": metadata,
+                            "review_metadata": None,
+                        },
+                    )
+                    normalized["status"] = "QUEUED"
+                    normalized["current_execution_arn"] = execution_arn
+                except Exception as exc:  # pragma: no cover
+                    logger.exception("Failed to launch Step Functions execution for %s", job_id)
+                    return server_error("Failed to launch render execution")
+
+        return ok(normalized)
+
+    @staticmethod
+    def _build_review_context(job: Dict[str, Any], review_metadata: Dict[str, Any]) -> Dict[str, Any]:
+        if not review_metadata:
+            return {}
+
+        context: Dict[str, Any] = {}
+        bundle_key = review_metadata.get("bundle_key")
+        if isinstance(bundle_key, str) and bundle_key:
+            context["bundle_key"] = bundle_key
+        clip_ids = review_metadata.get("clip_ids")
+        if isinstance(clip_ids, list) and clip_ids:
+            context["clip_ids"] = clip_ids
+        output_prefix = review_metadata.get("output_prefix")
+        if isinstance(output_prefix, str) and output_prefix:
+            context["output_prefix"] = output_prefix
+        article = review_metadata.get("article")
+        if isinstance(article, dict) and article:
+            context["article"] = article
+        script_snapshot = review_metadata.get("script")
+        if isinstance(script_snapshot, dict) and script_snapshot:
+            context["script"] = script_snapshot
+        narration = review_metadata.get("narration")
+        if isinstance(narration, dict) and narration:
+            context["narration"] = narration
+
+        article_url = job.get("url")
+        if isinstance(article_url, str) and article_url:
+            context.setdefault("article", {})
+            context["article"].setdefault("url", article_url)
+
+        return context
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:  # pragma: no cover - AWS entry

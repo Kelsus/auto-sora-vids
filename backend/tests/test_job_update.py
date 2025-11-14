@@ -64,12 +64,18 @@ class StubRepository:
             return dict(self.item)
         return None
 
-    def update_status(self, job_id: str, status: str, attributes: Dict[str, Any]) -> None:
+    def update_status(self, job_id: str, status: Any, attributes: Dict[str, Any] | None = None) -> None:
         if self.update_error:
             raise self.update_error
-        self.updates.append((job_id, status, attributes))
+        if hasattr(status, "status") and hasattr(status, "attributes"):
+            status_value = status.status
+            attributes = status.attributes
+        else:
+            status_value = status
+            attributes = attributes or {}
+        self.updates.append((job_id, status_value, attributes))
         record = dict(self.item) if self.item and self.item.get("jobId") == job_id else {"jobId": job_id}
-        record["status"] = status
+        record["status"] = status_value
         for key, value in attributes.items():
             if value is None:
                 record.pop(key, None)
@@ -243,7 +249,7 @@ def test_cancel_job_when_service_not_configured(monkeypatch: pytest.MonkeyPatch)
 def test_returns_not_found_when_job_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     store = StubStore(error=JobDoesNotExist("missing"))
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = JobUpdateApplication(store=store)
+    app = build_app(store)
 
     event = {
         "httpMethod": "PATCH",
@@ -258,7 +264,7 @@ def test_returns_not_found_when_job_missing(monkeypatch: pytest.MonkeyPatch) -> 
 def test_returns_server_error_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     store = StubStore(error=UpdateError("boom"))
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = JobUpdateApplication(store=store)
+    app = build_app(store)
 
     event = {
         "httpMethod": "PATCH",
@@ -273,7 +279,7 @@ def test_returns_server_error_on_failure(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_handles_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     store = StubStore()
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = JobUpdateApplication(store=store)
+    app = build_app(store)
 
     event = {
         "httpMethod": "OPTIONS",
@@ -454,6 +460,119 @@ def test_pending_transition_artifact_cleanup_failure_returns_server_error(monkey
 
     assert response["statusCode"] == 500
     assert store.job_id is None
+
+
+def test_review_action_rejects_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    repository = StubRepository(
+        item={
+            "jobId": "abc",
+            "status": "REVIEW",
+            "metadata": {"pipeline_config": {}},
+            "review_metadata": {"bundle_key": "jobs/abc/bundle.json"},
+        }
+    )
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"review_action": "reject", "review_notes": "needs work"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 200
+    assert repository.item["status"] == "REJECTED"
+    assert repository.item["metadata"]["latest_review"]["notes"] == "needs work"
+
+
+def test_review_action_approve_updates_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    repository = StubRepository(
+        item={
+            "jobId": "abc",
+            "status": "REVIEW",
+            "stage": "pre_sora_complete",
+            "metadata": {
+                "pipeline_config": {
+                    "pause_after_prompts": True,
+                    "stop_before_sora": True,
+                    "prepare_voice_during_prompts": True,
+                }
+            },
+            "review_metadata": {"bundle_key": "jobs/abc/bundle.json"},
+        }
+    )
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"review_action": "APPROVE", "review_notes": "ship it"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 200
+    assert repository.item["status"] == "PENDING"
+    pipeline = repository.item["metadata"]["pipeline_config"]
+    assert pipeline["resume_from_bundle"] == "jobs/abc/bundle.json"
+    assert pipeline.get("pause_after_prompts") is False
+    assert "stop_before_sora" not in pipeline
+    assert "prepare_voice_during_prompts" not in pipeline
+    assert "stage" not in repository.item
+
+
+def test_review_action_redo_captures_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    repository = StubRepository(
+        item={
+            "jobId": "abc",
+            "status": "REVIEW",
+            "url": "https://example.com/story",
+            "metadata": {"pipeline_config": {"pause_after_prompts": True}},
+            "review_metadata": {
+                "bundle_key": "jobs/abc/bundle.json",
+                "output_prefix": "jobs/abc/run",
+                "clip_ids": ["hook", "reveal"],
+                "script": {"premise": "test", "beats": [{"id": "hook"}]},
+                "article": {"title": "Story"},
+            },
+        }
+    )
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"review_action": "REDO", "review_notes": "needs copy fixes"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 200
+    feedback = repository.item["metadata"].get("review_feedback")
+    assert feedback["context"]["bundle_key"] == "jobs/abc/bundle.json"
+    assert feedback["context"]["clip_ids"] == ["hook", "reveal"]
+    assert feedback["context"]["article"]["url"] == "https://example.com/story"
+    assert feedback["context"].get("script")
+
+
+def test_review_action_approve_requires_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = StubStore()
+    repository = StubRepository(item={"jobId": "abc", "status": "REVIEW", "metadata": {"pipeline_config": {}}})
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"review_action": "APPROVE"}),
+    }
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 400
 
 
 class FakeRepository:

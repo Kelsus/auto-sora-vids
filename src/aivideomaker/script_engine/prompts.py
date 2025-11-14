@@ -19,29 +19,13 @@ if TYPE_CHECKING:
 
 SCRIPT_PLANNING_PROMPT = dedent(
     """
-    You are an investigative video script writer. Turn the provided article into a suspenseful narrative
-    that hooks the viewer by foregrounding the controversy and withholding context as long as possible,
-    without becoming misleading.
+    You are a provessional video script writer capable of writing captivating scripts across a variety of genres and styles. 
+    Turn the provided article into a video script that is tailored to the requested style and length profile,
+    that hooks the viewer by either revealing a compeling promise or creating a narrative that slowly lets out
+    information depending on the style of video you're creating. Make sure to stay true to the article's content and do not
+    becoming misleading.
 
 {style_block}
-
-    Before drafting, articulate the article's central thesis in one sentence and list the top three fresh facts,
-    quotes, or data points that prove it (including any specific numbers, time horizons, or stakeholder stances).
-    Track these anchor insights through the outline so the finished script never loses the core argument.
-
-    Before drafting, pinpoint the article's fresh insight versus widely known background facts.
-    Make sure the withheld context and final reveal surface that unique angle and avoid presenting
-    a well-known premise as the twist. When the story references earlier triggers (e.g., January frontloading),
-    treat them as background context; the intrigue should center on why those past moves still matter today
-    and what new metrics prove it. Anchor the beats in clear timeline cues so viewers grasp why the story
-    matters right now and how earlier events are still rippling through the data. When you fill
-    `withheld_context` and `final_reveal`, spotlight the new evidence the article surfaces—ongoing inventory
-    gluts, freight slowdowns, hiring freezes—using the earlier trigger only as setup, not the punchline.
-
-    Never invent conflict: ground the controversy in the article's documented tension (e.g., executives delaying
-    supply-chain moves until tariffs settle, even as they rush funding toward AI pilots). Ensure the
-    `controversy_summary` contrasts the clashing priorities accurately. The `final_reveal` must restate the
-    article's primary takeaway in plain language, supported by at least one of the fresh facts you identified.
 
     When you cite a fact or metric, lightly attribute its origin—reference the publication, dataset, research team,
     or institution in natural language (e.g., "According to Supply Chain Dive" or "Researchers at MIT found...").

@@ -95,9 +95,20 @@ NARRATIVE_STYLE_DIRECTIVES: dict[str, NarrativeStyleDirective] = {
             "primary revelation without inventing drama."
         ),
         tone_rules=(
-            "Open with urgency; hint that something important is being hidden in plain sight.",
+            "Open with urgency; if the article allows it, hint that something you expected to be true is not.",
             "Use confident, reporterly narration with light skepticism and specific sourcing cues.",
             "Let suspense rise beat by beat until the final reveal resolves the tension.",
+            "Before drafting, articulate the article's central thesis in one sentence and list the top three fresh facts,",
+            "quotes, or data points that prove it (including any specific numbers, time horizons, or stakeholder stances).",
+            "Track these anchor insights through the outline so the finished script never loses the core argument.",
+            "Before drafting, pinpoint the article's fresh insight versus widely known background facts.",
+            "Make sure the withheld context and final reveal surface that unique angle and avoid presenting",
+            "a well-known premise as the twist. Anchor the beats in clear timeline cues so viewers grasp why the story",
+            "matters right now and how it relates to other events in the article. When you fill",
+            "`withheld_context` and `final_reveal`, spotlight the new evidence the article surfaces, not the punchline.",
+            "Never invent conflict: ground the controversy in the article's documented tension. Ensure the",
+            "`controversy_summary` contrasts the clashing priorities accurately. The `final_reveal` must restate the",
+            "article's primary takeaway in plain language, supported by at least one of the fresh facts you identified.",
         ),
         structure_rules=(
             "Beat 1 is the hook with a provocative question or unexpected stake.",
@@ -113,8 +124,9 @@ NARRATIVE_STYLE_DIRECTIVES: dict[str, NarrativeStyleDirective] = {
         style_id="how_to",
         display_name="How-To Explainer",
         framing=(
-            "Teach the viewer how to replicate the article's playbook. Every beat must be an actionable step or principle,"
-            " ordered from setup to payoff."
+            "Teach the viewer how to replicate the article's playbook. Stick to the presentation used in the article.",
+            "So if the article lists steps, use the same numbering. If the article teaches in narative style, use the same structure.",
+            "Begin the script with a framing beat that tells the viewer what they'll learn and why it's important."
         ),
         tone_rules=(
             "Second-person coaching voice ('you', 'your team').",
@@ -122,28 +134,27 @@ NARRATIVE_STYLE_DIRECTIVES: dict[str, NarrativeStyleDirective] = {
             "Blend authority with encouragement—make the viewer feel guided by a sharp operator.",
         ),
         structure_rules=(
-            "Label beats sequentially (Step 1, Step 2, etc.) in the prose itself.",
+            "Label the beats as they appear in the article. If the article lists steps, use the same numbering.", 
+            "If the article teaches in narative style, use the same structure. Label the beats as they appear in the article.",
             "Each beat introduces one discrete move, backed by the article's evidence or quotes.",
             "Final beat summarizes the checklist and stakes the payoff if the viewer follows it.",
-        ),
-        finishing_notes=(
-            "Avoid suspense wording; clarity and momentum matter more than mystery.",
-            "If the article lacks literal steps, distill its main arguments into operator tasks.",
         ),
     ),
     "listicle": NarrativeStyleDirective(
         style_id="listicle",
         display_name="List Spotlight",
         framing=(
-            "Deliver the story as a countdown or ranked list. Highlight distinct items or actors and why each matters now."
+            "Make the script paraphrase the items in the list from the article. ",
+            "Make sure to include all the items in the list in the script. Begin the ",
+            "script with a framing beat that sets up the list and why it's interesting."
         ),
         tone_rules=(
-            "Punchy, confident narration with quick pivots between items.",
+            "Use a conversational tone. Speak in the first person as if you're talking to the viewer.",
             "Use vivid descriptors so each item feels visually distinct.",
             "Call out stakes or surprises per item—what makes this entry list-worthy?",
         ),
         structure_rules=(
-            "Open with a framing beat that sets up the list and why it's urgent.",
+            "Open with a framing beat that sets up the list and why it's interesting or important.",
             "Each subsequent beat focuses on one list item with a headline-style setup followed by receipts.",
             "Close with a synthesis beat that ties the list back to the thesis or previews what happens next.",
         ),
@@ -156,21 +167,23 @@ NARRATIVE_STYLE_DIRECTIVES: dict[str, NarrativeStyleDirective] = {
         style_id="first_person",
         display_name="First Person Story",
         framing=(
-            "Channel the article's narrator directly. Reference their name and publication up top, speak in first-person when relaying their experience, and weave in their internal reactions alongside the data they cite."
+            "Introduce the original author by name and outlet right away so the viewer knows whose experience you're relaying.",
+            "Retell the journey in a conversational third-person voice—make it clear you're narrating what the author lived through, not inventing new beats.",
+            "Weave the author's internal reactions together with the data or quotes they cited so feelings and facts stay paired.",
         ),
         tone_rules=(
-            "Use conversational first-person language (\"I\", \"me\", \"my\") when echoing the author's experience; switch to third person only when adding external context.",
-            "Highlight sensory details, emotions, and micro-observations exactly as the writer described them.",
-            "Balance intimacy with reportage -- tie personal revelations back to broader stakes or trends the article documents.",
+            "Sound like a close colleague retelling someone else's firsthand account while keeping attribution crystal clear.",
+            "Highlight the sensory details, emotions, and micro-observations exactly as the writer described them.",
+            "Balance intimacy with reportage—every personal beat should point back to a broader implication or documented trend.",
         ),
         structure_rules=(
-            "Beat 1 introduces the author, outlet, setting, and the spark for their realization.",
-            "Middle beats follow the journey chronologically -- what they noticed, how it felt, the contradictions they wrestled with.",
-            "Resolution beat connects the personal epiphany to a bigger takeaway for the viewer (what this means for riders, workers, or the industry).",
+            "Beat 1 names the author and publication, sets the scene, and explains what triggered their investigation.",
+            "Middle beats follow the article's chronology: what the author noticed, how they responded, and the contradictions they wrestled with.",
+            "Final beat connects the author's realization to the viewer—why this perspective matters for the industry, workers, or community now.",
         ),
         finishing_notes=(
-            "Quote short lines from the piece when they capture the narrator's voice; make sure attribution stays clear.",
-            "Invite the viewer into the moment (\"here's what I saw\" / \"here's when it clicked\") while still fact-checking against the article.",
+            "Quote short lines from the piece when they capture the narrator's voice; keep speaker attribution obvious.",
+            "Use framing like ‘Here’s what [author name] saw’ or ‘That’s when it clicked for them’ so the viewer feels guided through the author’s moment.",
         ),
     ),
 }

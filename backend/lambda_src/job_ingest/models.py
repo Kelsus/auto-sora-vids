@@ -32,9 +32,21 @@ class JobRequest:
             raise ValidationError("job_type must be one of SCHEDULED, IMMEDIATE")
 
         status = str(payload.get("status", "PENDING")).upper()
-        if status not in {"PENDING", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELED"}:
+        allowed_statuses = {
+            "PENDING",
+            "REVIEW",
+            "REVISION_REQUESTED",
+            "REJECTED",
+            "QUEUED",
+            "RUNNING",
+            "COMPLETED",
+            "FAILED",
+            "CANCELED",
+        }
+        if status not in allowed_statuses:
+            allowed_csv = ", ".join(sorted(allowed_statuses))
             raise ValidationError(
-                "status must be one of PENDING, QUEUED, RUNNING, COMPLETED, FAILED, CANCELED"
+                f"status must be one of {allowed_csv}"
             )
 
         scheduled_input = payload.get("scheduled_datetime")
