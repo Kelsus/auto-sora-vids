@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 root_dir = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(root_dir / "backend" / "lambda_src"))
 sys.path.insert(0, str(root_dir / "backend" / "lambda_src" / "common_layer" / "python"))
@@ -568,8 +570,10 @@ def test_mark_failed_handler_updates_original_job(tmp_path, monkeypatch):
         "action": "MARK_FAILED",
     }
 
-    worker_handler.handler(event, None)
+    with pytest.raises(RuntimeError) as exc:
+        worker_handler.handler(event, None)
 
+    assert "503 Server Error" in str(exc.value)
     assert repo.records[original_job_id]["status"] == "FAILED"
     assert repo.records[original_job_id]["error_message"].startswith("{")
 
@@ -606,9 +610,10 @@ def test_mark_failed_handler_handles_state_payload(tmp_path, monkeypatch):
 
     event = {"action": "MARK_FAILED", "state": state_payload}
 
-    result = worker_handler.handler(event, None)
+    with pytest.raises(RuntimeError) as exc:
+        worker_handler.handler(event, None)
 
-    assert result == {"jobId": job_id, "status": "FAILED"}
+    assert "403 Client Error" in str(exc.value)
     record = repo.fetch(job_id)
     assert record and record["status"] == "FAILED"
     assert record["error_message"].startswith("{")

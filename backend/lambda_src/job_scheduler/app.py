@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, Iterable, List
 
 from common import JobsRepository, utc_now_iso
+from common.dynamodb_utils import normalize_dynamodb_value
 from job_scheduler.dispatcher import QueueDispatcher
 from job_scheduler.models import ScheduledJob
 from job_scheduler.settings import SchedulerSettings
@@ -53,7 +54,7 @@ class SchedulerApplication:
             if "url" not in item:
                 logger.warning("Skipping job %s without url attribute", item.get("jobId", "unknown"))
                 continue
-            job = ScheduledJob.from_item(item)
+            job = ScheduledJob.from_item(normalize_dynamodb_value(item))
             if self._repository.transition_status(job.job_id, "PENDING", "QUEUED"):
                 self._dispatcher.dispatch(job)
                 dispatched += 1

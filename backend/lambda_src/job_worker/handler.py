@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional
 
 from job_worker.models import ClipTask, JobContext, JobMetadata
@@ -100,6 +101,28 @@ def handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:  # pragma: 
         if not job_id:
             raise ValueError("Unable to determine job id for failure update")
 
-        return {"jobId": job_id, "status": "FAILED"}
+        message = _format_failure_message(error_payload) if error_payload else "Job pipeline failed"
+        raise RuntimeError(message)
 
     raise ValueError(f"Unknown action '{action}'")
+
+
+def _format_failure_message(payload: Any) -> str:
+    if isinstance(payload, dict):
+        if isinstance(payload.get("Cause"), str) and payload["Cause"].strip():
+            cause = payload["Cause"].strip()
+            try:
+                parsed = json.loads(cause)
+                if isinstance(parsed, dict):
+                    return parsed.get("errorMessage") or cause
+            except json.JSONDecodeError:
+                pass
+            return cause
+        for key in ("errorMessage", "Error", "Cause"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return json.dumps(payload)[:400]
+    if payload is None:
+        return "Job pipeline failed"
+    return str(payload)

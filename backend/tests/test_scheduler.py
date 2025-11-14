@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Dict, List
+import json
 import sys
 from pathlib import Path
 
@@ -93,3 +95,44 @@ def test_scheduler_handles_empty_query():
 
     assert result == {"evaluated": 0, "dispatched": 0}
     assert not dispatcher.started
+
+
+def test_scheduler_normalizes_decimal_metadata():
+    settings = SchedulerSettings(
+        jobs_table_name="tbl",
+        status_schedule_index="idx",
+        dispatch_queue_url="https://sqs.us-east-1.amazonaws.com/123/demo",
+        batch_size=1,
+    )
+    scheduled_items = [
+        {
+            "jobId": "job-decimal",
+            "url": "https://example.com/decimal",
+            "metadata": {
+                "pipeline_config": {"pause_after_prompts": True},
+                "review_log": [
+                    {
+                        "script": {
+                            "beats": [
+                                {
+                                    "estimated_duration_sec": Decimal("6.5"),
+                                }
+                            ]
+                        }
+                    }
+                ],
+            },
+        }
+    ]
+    repo = StubRepository(scheduled_items=scheduled_items, immediate_items=[], consumable_ids=["job-decimal"])
+    dispatcher = RecordingDispatcher()
+    app = SchedulerApplication(settings=settings, repository=repo, dispatcher=dispatcher)
+
+    result = app.handle()
+
+    assert result == {"evaluated": 1, "dispatched": 1}
+    job = dispatcher.started[0]
+    # Ensure metadata no longer contains Decimal values
+    assert isinstance(job.metadata["review_log"][0]["script"]["beats"][0]["estimated_duration_sec"], float)
+    # Confirm serialization does not raise
+    json.dumps(job.to_message())

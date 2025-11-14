@@ -515,8 +515,7 @@ class VideoAutomationStack(Stack):
             result_path=sfn.JsonPath.DISCARD,
             payload_response_only=True,
         )
-        fail_state = sfn.Fail(self, "JobFailed")
-        failure_chain = sfn.Chain.start(failure_handler).next(fail_state)
+        failure_chain = sfn.Chain.start(failure_handler)
 
         initialize_state = tasks.LambdaInvoke(
             self,
