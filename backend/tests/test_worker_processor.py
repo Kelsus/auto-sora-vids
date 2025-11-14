@@ -347,6 +347,29 @@ def test_generate_prompts_includes_pipeline_config_override(tmp_path):
     assert restored.pipeline_config["pause_after_prompts"] is True
 
 
+def test_generate_prompts_honors_voice_override(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    metadata = JobMetadata(
+        job_id="story",
+        article_url="https://example.com/story",
+        pipeline_config={
+            "voice_id": "custom-voice",
+            "narration_voice_id": "custom-voice",
+        },
+    )
+
+    context = workflow.generate_prompts(metadata)
+
+    assert context.pipeline_config.get("voice_id") == "custom-voice"
+    assert context.pipeline_config.get("narration_voice_id") == "custom-voice"
+
+
 def test_render_clip_updates_bundle_and_storage(tmp_path):
     settings = build_settings(tmp_path)
     runner = StubRunner(tmp_path)
