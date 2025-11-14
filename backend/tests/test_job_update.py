@@ -84,6 +84,24 @@ class StubRepository:
         self.item = record
 
 
+def _contains_float(value: Any) -> bool:
+    if isinstance(value, float):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_float(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_float(v) for v in value)
+    return False
+
+
+class StrictStubRepository(StubRepository):
+    def update_status(self, job_id: str, status: Any, attributes: Dict[str, Any] | None = None) -> None:  # type: ignore[override]
+        attrs = attributes or {}
+        if _contains_float(attrs):
+            raise AssertionError("Float value serialized into DynamoDB payload")
+        super().update_status(job_id, status, attributes)
+
+
 class StubPaginator:
     def __init__(self, pages: list[dict[str, Any]]) -> None:
         self.pages = pages
@@ -473,7 +491,7 @@ def test_review_action_rejects_job(monkeypatch: pytest.MonkeyPatch) -> None:
         }
     )
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = build_app(store, repository=repository)
+    app = build_app(store, repository=repository, cancel_service=StubCancellationService())
 
     event = {
         "httpMethod": "PATCH",
@@ -505,7 +523,7 @@ def test_review_action_approve_updates_pipeline(monkeypatch: pytest.MonkeyPatch)
         }
     )
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = build_app(store, repository=repository)
+    app = build_app(store, repository=repository, cancel_service=StubCancellationService())
 
     event = {
         "httpMethod": "PATCH",
@@ -542,7 +560,7 @@ def test_review_action_redo_captures_context(monkeypatch: pytest.MonkeyPatch) ->
         }
     )
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = build_app(store, repository=repository)
+    app = build_app(store, repository=repository, cancel_service=StubCancellationService())
 
     event = {
         "httpMethod": "PATCH",
@@ -557,6 +575,111 @@ def test_review_action_redo_captures_context(monkeypatch: pytest.MonkeyPatch) ->
     assert feedback["context"]["clip_ids"] == ["hook", "reveal"]
     assert feedback["context"]["article"]["url"] == "https://example.com/story"
     assert feedback["context"].get("script")
+
+
+def test_review_action_redo_serializes_existing_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = StrictStubRepository(
+        item={
+            "jobId": "abc",
+            "status": "REVIEW",
+            "url": "https://example.com/story",
+            "metadata": {
+                "pipeline_config": {"pause_after_prompts": True},
+                "review_log": [
+                    {
+                        "action": "REDO",
+                        "notes": "First pass",
+                        "context": {
+                            "script": {
+                                "beats": [
+                                    {
+                                        "id": "hook",
+                                        "estimated_duration_sec": 6.4,
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                ],
+            },
+            "review_metadata": {
+                "bundle_key": "jobs/abc/bundle.json",
+                "output_prefix": "jobs/abc/run",
+                "clip_ids": ["hook"],
+                "script": {"beats": [{"id": "hook", "estimated_duration_sec": 6.7}]},
+            },
+        }
+    )
+    store = StubStore()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository)
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"review_action": "REDO", "review_notes": "Try again"}),
+    }
+
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 200
+    assert repository.updates
+    latest_feedback = repository.item["metadata"]["review_log"][-1]
+    assert latest_feedback["notes"] == "Try again"
+
+
+class StubExecutionLauncher:
+    def __init__(self) -> None:
+        self.started: list[str] = []
+
+    def start_execution(self, job) -> str:  # type: ignore[no-untyped-def]
+        self.started.append(job.job_id)
+        return "arn:aws:states:us-east-1:123456789012:execution/test"
+
+
+def test_review_action_approve_serializes_metadata_on_queue_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = StrictStubRepository(
+        item={
+            "jobId": "abc",
+            "status": "REVIEW",
+            "url": "https://example.com/story",
+            "metadata": {
+                "pipeline_config": {
+                    "pause_after_prompts": True,
+                    "stop_before_sora": True,
+                    "prepare_voice_during_prompts": True,
+                },
+                "review_log": [
+                    {
+                        "action": "REDO",
+                        "context": {
+                            "script": {
+                                "beats": [{"id": "intro", "estimated_duration_sec": 6.5}],
+                            }
+                        },
+                    }
+                ],
+            },
+            "review_metadata": {"bundle_key": "jobs/abc/bundle.json"},
+        }
+    )
+    launcher = StubExecutionLauncher()
+    store = StubStore()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    monkeypatch.setenv("STATE_MACHINE_ARN", "arn:aws:states:us-east-1:123456789012:stateMachine:Video")
+    monkeypatch.setattr("job_update.app.ExecutionLauncher", lambda state_machine_arn: launcher)
+    app = build_app(store, repository=repository, cancel_service=StubCancellationService())
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"review_action": "APPROVE"}),
+    }
+
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 200
+    assert launcher.started == ["abc"]
 
 
 def test_review_action_approve_requires_bundle(monkeypatch: pytest.MonkeyPatch) -> None:

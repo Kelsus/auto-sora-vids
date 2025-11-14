@@ -24,7 +24,7 @@ from job_update.models import JobUpdatePayload
 from job_update.store import JobDoesNotExist, JobUpdateStore, UpdateError
 
 from common import JobsRepository, RepositoryError, ArtifactCleanupError, delete_job_artifacts
-from common.dynamodb_utils import normalize_dynamodb_value
+from common.dynamodb_utils import normalize_dynamodb_value, serialize_dynamodb_value
 from common.time_utils import utc_now_iso
 from job_scheduler.executor import ExecutionLauncher
 from job_scheduler.models import ScheduledJob
@@ -227,8 +227,10 @@ class JobUpdateApplication:
         metadata["review_log"] = review_log + [review_entry]
         metadata["latest_review"] = review_entry
 
+        sanitized_metadata = serialize_dynamodb_value(metadata)
+
         attributes = {
-            "metadata": metadata,
+            "metadata": sanitized_metadata,
             "current_execution_arn": None,
             "error_message": None,
             "review_metadata": None,
@@ -256,7 +258,7 @@ class JobUpdateApplication:
                         "QUEUED",
                         {
                             "current_execution_arn": execution_arn,
-                            "metadata": metadata,
+                            "metadata": sanitized_metadata,
                             "review_metadata": None,
                         },
                     )
