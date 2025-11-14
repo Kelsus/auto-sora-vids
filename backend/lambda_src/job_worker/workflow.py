@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from imageio_ffmpeg import get_ffmpeg_exe
 
@@ -67,13 +67,7 @@ class PipelineWorkflow:
         if resume_key:
             target_bundle_key = bundle_key_override or self._settings.bundle_key(metadata.job_id)
             bundle = self._bundle_store.load(target_bundle_key)
-            clip_ids = [
-                prompt.chunk_id
-                for prompt in bundle.prompts.media_prompts
-                if getattr(prompt, "render_mode", "") == "sora_clip"
-            ]
-            if not clip_ids:
-                clip_ids = [prompt.chunk_id for prompt in bundle.prompts.media_prompts]
+            clip_ids = self._collect_clip_ids(bundle)
         else:
             runner = self._get_runner(pipeline_overrides)
             prompts_result = runner.run_prompts(
@@ -154,6 +148,16 @@ class PipelineWorkflow:
         )
         logger.info("Prepared prompts for job %s (%d clips)", job_id, len(clip_ids))
         return context
+
+    @staticmethod
+    def _collect_clip_ids(bundle) -> List[str]:
+        clip_ids: List[str] = []
+        prompts = getattr(getattr(bundle, "prompts", None), "media_prompts", []) or []
+        for prompt in prompts:
+            chunk_id = getattr(prompt, "chunk_id", None)
+            if chunk_id:
+                clip_ids.append(chunk_id)
+        return clip_ids
 
     def render_clip(self, task: ClipTask) -> Dict[str, Any]:
         context = task.job_context

@@ -288,6 +288,35 @@ def test_generate_prompts_sets_review_metadata_when_paused(tmp_path):
     assert len(review_metadata["script"]["beats"]) == len(runner.bundle.script.beats)
 
 
+def test_generate_prompts_resume_includes_non_sora_clips(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    bundle_key = settings.bundle_key("story")
+    bundle = FakeBundle("story", ["clip-1", "clip-2"])
+    bundle.prompts.media_prompts[0].render_mode = "sora_clip"
+    bundle.prompts.media_prompts[1].render_mode = "still_scene"
+    store.save(bundle_key, bundle)
+
+    metadata = JobMetadata(
+        job_id="story",
+        article_url="https://example.com/story",
+        pipeline_config={
+            "resume_from_bundle": bundle_key,
+            "pause_after_prompts": False,
+        },
+    )
+
+    context = workflow.generate_prompts(metadata)
+
+    assert context.clip_ids == ["clip-1", "clip-2"]
+    record = repo.fetch("story")
+    assert record["status"] == "RUNNING"
+
 def test_generate_prompts_includes_pipeline_config_override(tmp_path):
     settings = build_settings(tmp_path)
     runner = StubRunner(tmp_path)
