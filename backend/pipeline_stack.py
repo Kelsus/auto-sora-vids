@@ -475,6 +475,50 @@ class VideoAutomationStack(Stack):
             apigateway.LambdaIntegration(voice_list_lambda),
             api_key_required=True,
         )
+        article_probe_lambda = lambda_python.PythonFunction(
+            self,
+            "ArticleProbeLambda",
+            entry=str(lambda_src),
+            index="article_probe/handler.py",
+            handler="handler",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            bundling=function_bundling,
+        )
+        articles_resource = api.root.add_resource("articles")
+        article_test_resource = articles_resource.add_resource("test")
+        article_test_resource.add_method(
+            "POST",
+            apigateway.LambdaIntegration(article_probe_lambda),
+            api_key_required=True,
+        )
+        article_test_resource.add_method(
+            "OPTIONS",
+            apigateway.MockIntegration(
+                integration_responses=[
+                    apigateway.IntegrationResponse(
+                        status_code="200",
+                        response_parameters={
+                            "method.response.header.Access-Control-Allow-Origin": "' *'",
+                            "method.response.header.Access-Control-Allow-Headers": "'Content-Type'",
+                            "method.response.header.Access-Control-Allow-Methods": "'POST,OPTIONS'",
+                        },
+                    )
+                ],
+                request_templates={"application/json": "{\"statusCode\": 200}"},
+            ),
+            method_responses=[
+                apigateway.MethodResponse(
+                    status_code="200",
+                    response_parameters={
+                        "method.response.header.Access-Control-Allow-Origin": True,
+                        "method.response.header.Access-Control-Allow-Headers": True,
+                        "method.response.header.Access-Control-Allow-Methods": True,
+                    },
+                )
+            ],
+        )
 
         for env_var, parameter, name in secret_parameters:
             if env_var == "ELEVEN_LABS_API_KEY_PARAMETER":
