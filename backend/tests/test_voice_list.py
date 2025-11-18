@@ -25,6 +25,7 @@ def test_handle_event_filters_remote_results(monkeypatch):
 
     monkeypatch.setattr(voice_app.VoiceListApplication, "_fetch_voices", fake_fetch)
     monkeypatch.setattr(voice_app, "TARGET_QUALITIES", set())
+    monkeypatch.setattr(voice_app, "TARGET_TYPES", set())
     application = voice_app.VoiceListApplication()
 
     response = application.handle_event({"httpMethod": "GET"})
@@ -50,6 +51,7 @@ def test_handle_event_returns_top_results_when_filtered_under_min(monkeypatch):
 
     monkeypatch.setattr(voice_app.VoiceListApplication, "_fetch_voices", fake_fetch)
     monkeypatch.setattr(voice_app, "TARGET_QUALITIES", {"highest"})
+    monkeypatch.setattr(voice_app, "TARGET_TYPES", {"high_quality"})
     monkeypatch.setattr(voice_app, "MIN_RESULTS", 2)
     application = voice_app.VoiceListApplication()
 

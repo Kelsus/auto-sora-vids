@@ -25,7 +25,7 @@ def _parse_filter(var_name: str) -> set[str]:
 
 TARGET_LANGUAGES: set[str] = _parse_filter("VOICE_LIST_LANGUAGES")
 TARGET_QUALITIES: set[str] = _parse_filter("VOICE_LIST_QUALITIES")
-TARGET_TYPES: set[str] = _parse_filter("VOICE_LIST_TYPES")
+TARGET_TYPES: set[str] = _parse_filter("VOICE_LIST_TYPES") or {"high_quality"}
 MAX_RESULTS = 60
 MIN_RESULTS = max(1, int(os.environ.get("VOICE_LIST_MIN_RESULTS", "15")))
 
