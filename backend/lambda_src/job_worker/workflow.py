@@ -8,6 +8,7 @@ import subprocess
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
+from types import SimpleNamespace
 
 from imageio_ffmpeg import get_ffmpeg_exe
 
@@ -64,9 +65,19 @@ class PipelineWorkflow:
 
         auto_revision_required = False
 
+        script_override_entry = metadata_payload.get("script_override") if metadata_payload else None
+        article_override_entry = metadata_payload.get("article_override") if metadata_payload else None
+        if article_override_entry is not None and not isinstance(article_override_entry, Mapping):
+            article_override_entry = None
+
         if resume_key:
             target_bundle_key = bundle_key_override or self._settings.bundle_key(metadata.job_id)
             bundle = self._bundle_store.load(target_bundle_key)
+            if script_override_entry:
+                transcript = script_override_entry.get("transcript") if isinstance(script_override_entry, dict) else None
+                if isinstance(transcript, str) and transcript.strip():
+                    bundle = self._apply_script_override(bundle, transcript.strip())
+                    metadata_payload.pop("script_override", None)
             clip_ids = self._collect_clip_ids(bundle)
         else:
             runner = self._get_runner(pipeline_overrides)
@@ -74,6 +85,7 @@ class PipelineWorkflow:
                 metadata.article_url,
                 dry_run=dry_run_value,
                 review_feedback=review_decision,
+                article_override=article_override_entry,
             )
             bundle = prompts_result.bundle
             clip_ids = prompts_result.clip_ids
@@ -158,6 +170,62 @@ class PipelineWorkflow:
             if chunk_id:
                 clip_ids.append(chunk_id)
         return clip_ids
+
+    def _apply_script_override(self, bundle: PipelineBundle, transcript: str) -> PipelineBundle:
+        beats = bundle.script.beats
+        segments = self._distribute_transcript(beats, transcript)
+        updated_beats = []
+        for beat, text in zip(beats, segments):
+            cleaned = text.strip()
+            if hasattr(beat, "model_copy"):
+                updated_beats.append(beat.model_copy(update={"transcript": cleaned}))
+            else:
+                clone = SimpleNamespace(**beat.__dict__)
+                clone.transcript = cleaned
+                updated_beats.append(clone)
+        new_script = bundle.script.model_copy(update={"beats": updated_beats})
+        logger.info("Override script applied for job %s", bundle.article.slug)
+        return bundle.model_copy(
+            update={
+                "script": new_script,
+                "voice_transcript": None,
+                "narration_audio": None,
+                "narration_alignment": None,
+                "narration_alignment_payload": None,
+                "captions_ass_path": None,
+            },
+        )
+
+    def _distribute_transcript(self, beats: List[Beat], transcript: str) -> List[str]:
+        paragraphs = [segment.strip() for segment in transcript.split("\n\n") if segment.strip()]
+        if len(paragraphs) == len(beats):
+            return paragraphs
+
+        tokens = transcript.split()
+        if not tokens:
+            return ["" for _ in beats]
+        counts = [max(len(beat.transcript.split()), 1) for beat in beats]
+        total_old = sum(counts)
+        total_tokens = len(tokens)
+        if total_old == 0:
+            counts = [1 for _ in beats]
+            total_old = len(beats)
+
+        segments: list[str] = []
+        cursor = 0
+        for index, count in enumerate(counts):
+            if index == len(counts) - 1:
+                portion = tokens[cursor:]
+            else:
+                target = max(1, round((count / total_old) * total_tokens))
+                portion = tokens[cursor : min(cursor + target, total_tokens)]
+            if not portion:
+                portion = tokens[cursor:cursor + 1] if cursor < total_tokens else []
+            segments.append(" ".join(portion).strip())
+            cursor += len(portion)
+        if len(segments) < len(beats):
+            segments.extend(["" for _ in range(len(beats) - len(segments))])
+        return segments[: len(beats)]
 
     def render_clip(self, task: ClipTask) -> Dict[str, Any]:
         context = task.job_context

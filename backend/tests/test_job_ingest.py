@@ -73,6 +73,35 @@ def test_job_request_accepts_drive_folder_pipeline_config():
     assert job.metadata["pipeline_config"]["drive_folder"] == "folder-123"
 
 
+def test_job_request_accepts_article_override():
+    payload = {
+        "url": "https://example.com/story",
+        "scheduled_datetime": "2024-08-12T18:00:00Z",
+        "article_override": {
+            "text": "Manual article body",
+            "title": "Custom title",
+            "source": "Example",
+            "published_at": "2024-08-12T18:00:00Z",
+        },
+    }
+    job = JobRequest.from_payload(payload)
+    override = job.metadata["article_override"]
+    assert override["text"] == "Manual article body"
+    assert override["title"] == "Custom title"
+    assert override["source"] == "Example"
+    assert override["published_at"].endswith("Z") or "+" in override["published_at"]
+
+
+def test_job_request_rejects_invalid_article_override():
+    payload = {
+        "url": "https://example.com/story",
+        "scheduled_datetime": "2024-08-12T18:00:00Z",
+        "article_override": {"text": ""},
+    }
+    with pytest.raises(ValidationError):
+        JobRequest.from_payload(payload)
+
+
 def test_job_request_requires_string_drive_folder_when_present():
     payload = {
         "url": "https://example.com/story",

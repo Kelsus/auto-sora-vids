@@ -60,6 +60,7 @@ def pytest_configure(config) -> None:  # pragma: no cover - pytest hook
     if "botocore" not in sys.modules:
         botocore_module = types.ModuleType("botocore")
         exceptions_module = types.ModuleType("botocore.exceptions")
+        config_module = types.ModuleType("botocore.config")
 
         class _ClientError(Exception):
             pass
@@ -67,11 +68,22 @@ def pytest_configure(config) -> None:  # pragma: no cover - pytest hook
         class _ConditionalCheckFailedException(Exception):
             pass
 
+        class _BotoCoreError(Exception):
+            pass
+
+        class _Config:
+            def __init__(self, *args, **kwargs):
+                pass
+
         exceptions_module.ClientError = _ClientError
         exceptions_module.ConditionalCheckFailedException = _ConditionalCheckFailedException
+        exceptions_module.BotoCoreError = _BotoCoreError
         botocore_module.exceptions = exceptions_module
+        config_module.Config = _Config
+        botocore_module.config = config_module
         sys.modules["botocore"] = botocore_module
         sys.modules["botocore.exceptions"] = exceptions_module
+        sys.modules["botocore.config"] = config_module
 
     if "googleapiclient" not in sys.modules:
         google_module = types.ModuleType("googleapiclient")

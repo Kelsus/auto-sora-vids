@@ -21,10 +21,10 @@ MAX_LIMIT = 100
 class JobListApplication:
     """Handles paginated retrieval of job records."""
 
-    def __init__(self, store: JobListStore | None = None) -> None:
+    def __init__(self, store: JobListStore | None = None, s3_client: Any | None = None) -> None:
         table_name = os.environ["JOBS_TABLE_NAME"]
         self._store = store or JobListStore(table_name)
-        self._s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
+        self._s3 = s3_client
 
     def handle_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Job list event received")
@@ -123,7 +123,7 @@ class JobListApplication:
             return None
 
         try:
-            return self._s3.generate_presigned_url(
+            return self._ensure_s3().generate_presigned_url(
                 "get_object",
                 Params={"Bucket": bucket, "Key": key},
                 ExpiresIn=900,
@@ -158,6 +158,11 @@ class JobListApplication:
             return None
 
         return None
+
+    def _ensure_s3(self):  # type: ignore[return-value]
+        if self._s3 is None:
+            self._s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
+        return self._s3
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:  # pragma: no cover - AWS entry

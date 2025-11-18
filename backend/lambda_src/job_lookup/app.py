@@ -18,10 +18,10 @@ logger.setLevel(logging.INFO)
 class JobLookupApplication:
     """Handles retrieval of job metadata by ID."""
 
-    def __init__(self, repository: JobLookupStore | None = None) -> None:
+    def __init__(self, repository: JobLookupStore | None = None, s3_client: Any | None = None) -> None:
         table_name = os.environ["JOBS_TABLE_NAME"]
         self._repository = repository or JobLookupStore(table_name)
-        self._s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
+        self._s3 = s3_client
 
     def handle_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Job lookup event received")
@@ -95,7 +95,7 @@ class JobLookupApplication:
             return None
 
         try:
-            return self._s3.generate_presigned_url(
+            return self._ensure_s3().generate_presigned_url(
                 "get_object",
                 Params={"Bucket": bucket, "Key": key},
                 ExpiresIn=900,
@@ -130,6 +130,11 @@ class JobLookupApplication:
             return None
 
         return None
+
+    def _ensure_s3(self):  # type: ignore[return-value]
+        if self._s3 is None:
+            self._s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
+        return self._s3
 
     @staticmethod
     def _extract_job_id(event: Dict[str, Any]) -> str | None:

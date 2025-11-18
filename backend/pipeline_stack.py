@@ -339,6 +339,7 @@ class VideoAutomationStack(Stack):
             api_key_required=True,
         )
 
+
         usage_plan = api.add_usage_plan(
             "VideoJobsUsagePlan",
             name=f"video-automation-{stage}",
@@ -455,6 +456,30 @@ class VideoAutomationStack(Stack):
                 parameter_name=param_name,
             )
             secret_parameters.append((env_var, secret_param, param_name))
+
+        voice_list_lambda = lambda_python.PythonFunction(
+            self,
+            "VoiceListLambda",
+            entry=str(lambda_src),
+            index="voice_list/handler.py",
+            handler="handler",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            layers=[shared_layer],
+            bundling=function_bundling,
+        )
+        voices_resource = api.root.add_resource("voices")
+        voices_resource.add_method(
+            "GET",
+            apigateway.LambdaIntegration(voice_list_lambda),
+            api_key_required=True,
+        )
+
+        for env_var, parameter, name in secret_parameters:
+            if env_var == "ELEVEN_LABS_API_KEY_PARAMETER":
+                voice_list_lambda.add_environment(env_var, name)
+                parameter.grant_read(voice_list_lambda)
 
         image_asset_kwargs = dict(
             directory=str(project_root),

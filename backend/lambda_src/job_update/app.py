@@ -78,9 +78,14 @@ class JobUpdateApplication:
 
         review_action = None
         review_notes = None
+        script_override_text = None
         if isinstance(payload_dict, dict):
             review_action = payload_dict.pop("review_action", None)
             review_notes = payload_dict.pop("review_notes", None)
+            script_override_text = payload_dict.pop("script_text", None)
+
+        if script_override_text is not None:
+            return self._handle_script_override(job_id, str(script_override_text))
 
         payload: Optional[JobUpdatePayload] = None
         if payload_dict:
@@ -267,6 +272,80 @@ class JobUpdateApplication:
                 except Exception as exc:  # pragma: no cover
                     logger.exception("Failed to launch Step Functions execution for %s", job_id)
                     return server_error("Failed to launch render execution")
+
+        return ok(normalized)
+
+    def _handle_script_override(self, job_id: str, script_text: str) -> Dict[str, Any]:
+        script_text = script_text.strip()
+        if not script_text:
+            return bad_request("script_text must be a non-empty string")
+
+        try:
+            raw_job = self._repository.get_job(job_id)
+        except RepositoryError:
+            logger.exception("Failed to load job metadata for %s", job_id)
+            return server_error("Failed to load job")
+
+        if raw_job is None:
+            return not_found(job_id)
+
+        job = normalize_dynamodb_value(raw_job)
+        status = str(job.get("status", "")).upper()
+        if status not in {"REVIEW", "REVISION_REQUESTED"}:
+            return conflict("Script edits are only available while the job is awaiting review")
+        bundle_key = job.get("bundle_key") or job.get("metadata", {}).get("bundle_key")
+        output_bucket = job.get("output_bucket")
+        if not bundle_key or not output_bucket:
+            return conflict("Job is missing bundle metadata required for script overrides")
+
+        metadata = dict(job.get("metadata") or {})
+        pipeline_config = dict(metadata.get("pipeline_config") or {})
+        pipeline_config["resume_from_bundle"] = bundle_key
+        pipeline_config["pause_after_prompts"] = False
+        metadata["pipeline_config"] = pipeline_config
+        metadata.pop("review_feedback", None)
+        metadata["script_override"] = {
+            "transcript": script_text,
+            "updated_at": utc_now_iso(),
+        }
+
+        sanitized_metadata = serialize_dynamodb_value(metadata)
+
+        attributes = {
+            "metadata": sanitized_metadata,
+            "current_execution_arn": None,
+            "error_message": None,
+            "review_metadata": None,
+            "stage": None,
+        }
+
+        self._repository.update_status(job_id, "PENDING", attributes)
+        updated = self._repository.get_job(job_id)
+        if not updated:
+            return server_error("Failed to load updated job")
+        normalized = normalize_dynamodb_value(updated)
+
+        if self._execution_launcher is None:
+            logger.info("STATE_MACHINE_ARN not configured; job %s reset to PENDING after script override", job_id)
+            return ok(normalized)
+
+        try:
+            scheduled_job = ScheduledJob.from_item(normalized)
+            execution_arn = self._execution_launcher.start_execution(scheduled_job)
+            self._repository.update_status(
+                job_id,
+                "QUEUED",
+                {
+                    "current_execution_arn": execution_arn,
+                    "metadata": sanitized_metadata,
+                    "review_metadata": None,
+                },
+            )
+            normalized["status"] = "QUEUED"
+            normalized["current_execution_arn"] = execution_arn
+        except Exception:  # pragma: no cover
+            logger.exception("Failed to launch execution after script override for %s", job_id)
+            return server_error("Failed to launch render execution")
 
         return ok(normalized)
 

@@ -18,6 +18,14 @@ from job_worker.workflow import PipelineWorkflow
 from job_worker import handler as worker_handler
 
 
+class FakeScript(SimpleNamespace):
+    def model_copy(self, update=None):
+        data = dict(self.__dict__)
+        if update:
+            data.update(update)
+        return FakeScript(**data)
+
+
 class FakeBundle:
     def __init__(
         self,
@@ -49,10 +57,11 @@ class FakeBundle:
                 estimated_duration_sec=6.0,
                 audio_mood=None,
                 visual_seed=None,
+                transcript=f"Beat {idx} text",
             )
             for idx, _ in enumerate(clip_ids, start=1)
         ]
-        self.script = SimpleNamespace(
+        self.script = FakeScript(
             full_transcript="",
             beats=beats,
             premise="Sample premise",
@@ -97,9 +106,11 @@ class StubRunner:
         self.render_calls: list[str] = []
         self.stitch_calls: list[str] = []
         self.bundle = FakeBundle("story", ["clip-1", "clip-2"])
+        self.article_overrides: list[object | None] = []
 
-    def run_prompts(self, article_url: str, dry_run: bool, review_feedback=None):
+    def run_prompts(self, article_url: str, dry_run: bool, review_feedback=None, article_override=None):
         self.prompts_called_with.append(article_url)
+        self.article_overrides.append(article_override)
         return SimpleNamespace(bundle=self.bundle, clip_ids=[prompt.chunk_id for prompt in self.bundle.prompts.media_prompts])
 
     def render_clip(self, bundle: FakeBundle, clip_id: str, dry_run: bool):
@@ -368,6 +379,111 @@ def test_generate_prompts_honors_voice_override(tmp_path):
 
     assert context.pipeline_config.get("voice_id") == "custom-voice"
     assert context.pipeline_config.get("narration_voice_id") == "custom-voice"
+
+
+def test_generate_prompts_applies_script_override(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    bundle_key = settings.bundle_key("story")
+    bundle = FakeBundle("story", ["clip-1", "clip-2"])
+    store.save(bundle_key, bundle)
+
+    metadata = JobMetadata(
+        job_id="story",
+        article_url="https://example.com/story",
+        metadata={
+            "script_override": {
+                "transcript": "Line one.\n\nLine two is longer and more detailed.",
+            },
+        },
+        pipeline_config={
+            "resume_from_bundle": bundle_key,
+            "pause_after_prompts": False,
+        },
+    )
+
+    context = workflow.generate_prompts(metadata)
+
+    saved_bundle = store.saved[bundle_key]
+    assert saved_bundle.script.beats[0].transcript.startswith("Line one")
+    assert "Line two" in saved_bundle.script.beats[1].transcript
+    assert context.clip_ids == ["clip-1", "clip-2"]
+
+
+def test_generate_prompts_passes_article_override(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    metadata = JobMetadata(
+        job_id="story",
+        article_url="https://example.com/story",
+        metadata={
+            "article_override": {
+                "text": "Manual body",
+                "title": "Manual",
+            }
+        },
+    )
+
+    workflow.generate_prompts(metadata)
+
+    assert runner.article_overrides[-1]["text"] == "Manual body"
+
+
+def test_generate_prompts_script_override_clears_cached_narration(tmp_path):
+    settings = build_settings(tmp_path)
+    runner = StubRunner(tmp_path)
+    storage = RecordingStorage(tmp_path / "snapshots")
+    store = RecordingBundleStore()
+    repo = RecordingRepository()
+    workflow = PipelineWorkflow(settings=settings, repository=repo, storage=storage, bundle_store=store, runner=runner)
+
+    bundle_key = settings.bundle_key("story")
+    bundle = FakeBundle("story", ["clip-1", "clip-2"])
+    voice_dir = tmp_path / "story" / "voice"
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    transcript_path = voice_dir / "transcript.txt"
+    transcript_path.write_text("old narration", encoding="utf-8")
+    audio_path = voice_dir / "audio.mp3"
+    audio_path.write_text("data", encoding="utf-8")
+    alignment_path = voice_dir / "alignment.json"
+    alignment_path.write_text("{}", encoding="utf-8")
+    bundle.voice_transcript = transcript_path
+    bundle.narration_audio = audio_path
+    bundle.narration_alignment = alignment_path
+    bundle.narration_alignment_payload = {"segments": []}
+    store.save(bundle_key, bundle)
+
+    metadata = JobMetadata(
+        job_id="story",
+        article_url="https://example.com/story",
+        metadata={
+            "script_override": {
+                "transcript": "Line one.\n\nLine two.",
+            },
+        },
+        pipeline_config={
+            "resume_from_bundle": bundle_key,
+            "pause_after_prompts": False,
+        },
+    )
+
+    workflow.generate_prompts(metadata)
+
+    saved_bundle = store.saved[bundle_key]
+    assert saved_bundle.voice_transcript is None
+    assert saved_bundle.narration_audio is None
+    assert saved_bundle.narration_alignment is None
+    assert saved_bundle.narration_alignment_payload is None
 
 
 def test_render_clip_updates_bundle_and_storage(tmp_path):

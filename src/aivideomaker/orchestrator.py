@@ -7,14 +7,15 @@ import shutil
 import sys
 import textwrap
 from dataclasses import dataclass, field
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
-from typing import Any, Iterable, NamedTuple, Optional
+from typing import Any, Iterable, Mapping, NamedTuple, Optional
 
 from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field
 
-from aivideomaker.article_ingest.model import ArticleBundle, slugify
+from aivideomaker.article_ingest.model import ArticleBundle, ArticleDocument, ArticleMetadata, slugify
 from aivideomaker.chart_planner import ChartAssigner, ChartPlan, ChartPlanner, ChartIdea
 from aivideomaker.article_ingest.service import ArticleIngestor
 from aivideomaker.chunker.model import ChunkPlan
@@ -850,9 +851,13 @@ class PipelineOrchestrator:
         prompts_only: bool,
         cleanup: bool,
         external_review: ScriptReviewDecision | None = None,
+        article_override: Mapping[str, Any] | None = None,
     ) -> PipelineBundle:
         logger.info("📰  Ingesting article: %s", article_url)
-        article = self.article_ingestor.ingest(article_url)
+        if article_override:
+            article = self._bundle_from_override(article_url, article_override)
+        else:
+            article = self.article_ingestor.ingest(article_url)
         run_dirs = self._prepare_run_environment(article.slug, output_dir, cleanup)
         filename_base = article.slug
         article_title = article.article.metadata.title
@@ -1046,6 +1051,43 @@ class PipelineOrchestrator:
             chart_assignments=chart_assignments,
         )
 
+    def _bundle_from_override(
+        self,
+        article_url: str,
+        override: Mapping[str, Any],
+    ) -> PipelineBundle:
+        text = str(override.get("text") or "").strip()
+        if not text:
+            raise ValueError("Manual article override must include text")
+
+        title = str(override.get("title") or article_url)
+        byline_value = override.get("byline")
+        byline = byline_value.strip() if isinstance(byline_value, str) and byline_value.strip() else None
+        source_value = override.get("source")
+        source = source_value.strip() if isinstance(source_value, str) and source_value.strip() else None
+
+        published_raw = override.get("published_at")
+        published_at: datetime | None = None
+        if isinstance(published_raw, str) and published_raw.strip():
+            candidate = published_raw.strip()
+            if candidate.endswith("Z"):
+                candidate = candidate[:-1] + "+00:00"
+            try:
+                published_at = datetime.fromisoformat(candidate)
+            except ValueError:
+                published_at = None
+
+        metadata = ArticleMetadata(
+            url=article_url,
+            title=title,
+            byline=byline,
+            published_at=published_at,
+            source=source,
+            slug=None,
+        )
+        document = ArticleDocument(metadata=metadata, raw_html=None, text=text, summary=None)
+        return ArticleBundle.from_document(document)
+
     def run(
         self,
         article_url: str,
@@ -1090,6 +1132,7 @@ class PipelineOrchestrator:
         dry_run: bool = True,
         cleanup: bool = False,
         review_feedback: ScriptReviewDecision | None = None,
+        article_override: Mapping[str, Any] | None = None,
     ) -> PromptGenerationResult:
         base_bundle = self._build_initial_bundle(
             article_url=article_url,
@@ -1098,6 +1141,7 @@ class PipelineOrchestrator:
             prompts_only=True,
             cleanup=cleanup,
             external_review=review_feedback,
+            article_override=article_override,
         )
         prompt_bundle = self.execute_prompts(
             bundle=base_bundle,

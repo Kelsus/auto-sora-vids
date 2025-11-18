@@ -12,6 +12,9 @@ class ValidationError(ValueError):
     """Raised when the request payload cannot be processed."""
 
 
+MAX_OVERRIDE_LENGTH = 200_000
+
+
 @dataclass(frozen=True)
 class JobRequest:
     url: str
@@ -77,6 +80,12 @@ class JobRequest:
                 pipeline_config_dict["drive_folder"] = drive_folder.strip()
             metadata["pipeline_config"] = pipeline_config_dict
 
+        article_override = cls._parse_article_override(
+            payload.get("article_override") or payload.get("articleOverride")
+        )
+        if article_override:
+            metadata["article_override"] = article_override
+
         return cls(
             url=str(payload["url"]),
             scheduled_datetime=scheduled,
@@ -98,3 +107,36 @@ class JobRequest:
     @property
     def job_id(self) -> str:
         return slug_from_url(self.url)
+
+    @staticmethod
+    def _parse_article_override(raw: Any) -> Dict[str, Any] | None:
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping):
+            raise ValidationError("article_override must be an object")
+
+        text = raw.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValidationError("article_override.text must be a non-empty string")
+        normalized_text = text.strip()
+        if len(normalized_text) > MAX_OVERRIDE_LENGTH:
+            raise ValidationError(
+                f"article_override.text must be {MAX_OVERRIDE_LENGTH} characters or fewer"
+            )
+
+        override: Dict[str, Any] = {"text": normalized_text}
+
+        for field in ("title", "source", "byline"):
+            value = raw.get(field)
+            if isinstance(value, str) and value.strip():
+                override[field] = value.strip()
+
+        published_raw = raw.get("published_at") or raw.get("publishedAt")
+        if isinstance(published_raw, str) and published_raw.strip():
+            try:
+                published_dt = JobRequest._parse_datetime(published_raw.strip())
+            except ValueError as exc:
+                raise ValidationError("article_override.published_at must be ISO-8601") from exc
+            override["published_at"] = published_dt.isoformat()
+
+        return override

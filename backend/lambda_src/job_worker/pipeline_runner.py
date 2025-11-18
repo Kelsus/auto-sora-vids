@@ -46,6 +46,7 @@ class PipelineRunner:
         dry_run: bool,
         *,
         review_feedback: ScriptReviewDecision | None = None,
+        article_override: dict[str, object] | None = None,
     ) -> PromptGenerationResult:
         orchestrator = self._ensure_orchestrator()
         self._data_root.mkdir(parents=True, exist_ok=True)
@@ -55,6 +56,7 @@ class PipelineRunner:
             dry_run=dry_run,
             cleanup=True,
             review_feedback=review_feedback,
+            article_override=article_override,
         )
         logger.info("Generated prompts for %s", article_url)
         return result

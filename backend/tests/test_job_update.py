@@ -158,7 +158,9 @@ def test_updates_job(monkeypatch: pytest.MonkeyPatch) -> None:
     }
     response = app.handle_event(event)
 
-    assert response["statusCode"] == 200
+    import pytest
+    if response["statusCode"] != 200:
+        pytest.fail(f"response={response}")
     assert response["body"] == '{"jobId": "abc", "status": "RUNNING"}'
     assert store.job_id == "abc"
     assert store.payload is not None
@@ -193,7 +195,9 @@ def test_cancel_job_updates_status(monkeypatch: pytest.MonkeyPatch) -> None:
     }
     response = app.handle_event(event)
 
-    assert response["statusCode"] == 200
+    import pytest
+    if response["statusCode"] != 200:
+        pytest.fail(f"response={response}")
     assert cancel_service.job_id == "abc"
     assert store.job_id is None
 
@@ -612,7 +616,7 @@ def test_review_action_redo_serializes_existing_metadata(monkeypatch: pytest.Mon
     )
     store = StubStore()
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = build_app(store, repository=repository)
+    app = build_app(store, repository=repository, cancel_service=StubCancellationService())
 
     event = {
         "httpMethod": "PATCH",
@@ -686,7 +690,7 @@ def test_review_action_approve_requires_bundle(monkeypatch: pytest.MonkeyPatch) 
     store = StubStore()
     repository = StubRepository(item={"jobId": "abc", "status": "REVIEW", "metadata": {"pipeline_config": {}}})
     monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
-    app = build_app(store, repository=repository)
+    app = build_app(store, repository=repository, cancel_service=StubCancellationService())
 
     event = {
         "httpMethod": "PATCH",
@@ -696,6 +700,76 @@ def test_review_action_approve_requires_bundle(monkeypatch: pytest.MonkeyPatch) 
     response = app.handle_event(event)
 
     assert response["statusCode"] == 400
+
+
+def _make_job_item() -> dict[str, Any]:
+    return {
+        "jobId": "abc",
+        "status": "REVIEW",
+        "metadata": {"pipeline_config": {"pause_after_prompts": True}},
+        "bundle_key": "jobs/abc/bundle.json",
+        "output_bucket": "bucket",
+        "url": "https://example.com/story",
+    }
+
+
+def test_script_override_stores_text_and_launches(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = StrictStubRepository(item=_make_job_item())
+
+    class StubLauncher:
+        def __init__(self) -> None:
+            self.started: list[str] = []
+
+        def start_execution(self, job) -> str:  # type: ignore[no-untyped-def]
+            self.started.append(job.job_id)
+            return "arn:aws:states:us-east-1:123:execution/test"
+
+    launcher = StubLauncher()
+    store = StubStore()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    monkeypatch.setenv("STATE_MACHINE_ARN", "arn:state")
+    monkeypatch.setattr("job_update.app.ExecutionLauncher", lambda state_machine_arn: launcher)
+    app = build_app(store, repository=repository, cancel_service=StubCancellationService())
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"script_text": "New narration"}),
+    }
+
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 200
+    assert launcher.started == ["abc"]
+    metadata = repository.item["metadata"]
+    assert metadata.get("script_override", {}).get("transcript") == "New narration"
+    assert repository.item["status"] == "QUEUED"
+
+
+def test_script_override_restricted_to_review_states(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = StrictStubRepository(
+        item={
+            "jobId": "abc",
+            "status": "RUNNING",
+            "metadata": {"pipeline_config": {"pause_after_prompts": True}},
+            "bundle_key": "jobs/abc/bundle.json",
+            "output_bucket": "bucket",
+        },
+    )
+    store = StubStore()
+    monkeypatch.setenv("JOBS_TABLE_NAME", "jobs")
+    app = build_app(store, repository=repository, cancel_service=StubCancellationService())
+
+    event = {
+        "httpMethod": "PATCH",
+        "pathParameters": {"jobId": "abc"},
+        "body": json.dumps({"script_text": "New narration"}),
+    }
+
+    response = app.handle_event(event)
+
+    assert response["statusCode"] == 409
+    assert "awaiting review" in response["body"]
 
 
 class FakeRepository:
