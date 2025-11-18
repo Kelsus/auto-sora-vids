@@ -24,12 +24,39 @@ def test_handle_event_filters_remote_results(monkeypatch):
         ]
 
     monkeypatch.setattr(voice_app.VoiceListApplication, "_fetch_voices", fake_fetch)
+    monkeypatch.setattr(voice_app, "TARGET_QUALITIES", set())
     application = voice_app.VoiceListApplication()
 
     response = application.handle_event({"httpMethod": "GET"})
     assert response["statusCode"] == 200
     payload = json.loads(response["body"])
-    assert [voice["voiceId"] for voice in payload["voices"]] == ["alpha"]
+    assert [voice["voiceId"] for voice in payload["voices"]] == ["alpha", "beta"]
+
+
+def test_handle_event_returns_top_results_when_filtered_under_min(monkeypatch):
+    def fake_fetch(self):
+        return [
+            {
+                "voice_id": "alpha",
+                "name": "Alpha",
+                "labels": {"quality": "highest", "language": "english"},
+            },
+            {
+                "voice_id": "beta",
+                "name": "Beta",
+                "labels": {"quality": "standard", "language": "english"},
+            },
+        ]
+
+    monkeypatch.setattr(voice_app.VoiceListApplication, "_fetch_voices", fake_fetch)
+    monkeypatch.setattr(voice_app, "TARGET_QUALITIES", {"highest"})
+    monkeypatch.setattr(voice_app, "MIN_RESULTS", 2)
+    application = voice_app.VoiceListApplication()
+
+    response = application.handle_event({"httpMethod": "GET"})
+    assert response["statusCode"] == 200
+    payload = json.loads(response["body"])
+    assert [voice["voiceId"] for voice in payload["voices"]] == ["alpha", "beta"]
 
 
 def test_handle_event_uses_fallback_on_permission_error(monkeypatch):

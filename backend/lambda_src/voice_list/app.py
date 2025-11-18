@@ -16,16 +16,18 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 VOICE_API_URL = os.environ.get("ELEVEN_LABS_VOICE_API_URL", "https://api.elevenlabs.io/v1/voices")
+
+
 def _parse_filter(var_name: str) -> set[str]:
     raw = os.environ.get(var_name, "")
-    values = {entry.strip().lower() for entry in raw.split(",") if entry.strip()}
-    return values
+    return {entry.strip().lower() for entry in raw.split(",") if entry.strip()}
 
 
 TARGET_LANGUAGES: set[str] = _parse_filter("VOICE_LIST_LANGUAGES")
-TARGET_QUALITIES: set[str] = _parse_filter("VOICE_LIST_QUALITIES") or {"highest"}
+TARGET_QUALITIES: set[str] = _parse_filter("VOICE_LIST_QUALITIES")
 TARGET_TYPES: set[str] = _parse_filter("VOICE_LIST_TYPES")
 MAX_RESULTS = 60
+MIN_RESULTS = max(1, int(os.environ.get("VOICE_LIST_MIN_RESULTS", "15")))
 
 DEFAULT_FALLBACK_VOICES: List[Dict[str, Any]] = [
     {
@@ -103,11 +105,19 @@ class VoiceListApplication:
                 filtered.append(mapped)
             if len(filtered) >= MAX_RESULTS:
                 break
-        if filtered:
+        if filtered and len(filtered) >= MIN_RESULTS:
             logger.info("Returning %s filtered voices", len(filtered))
             return filtered
 
-        logger.warning("Filtered voice list is empty; falling back to static defaults")
+        logger.warning(
+            "Filtered voice list produced %s entries (<%s); using top results",
+            len(filtered),
+            MIN_RESULTS,
+        )
+        fallback = self._top_results(raw_voices)
+        if fallback:
+            return fallback
+        logger.warning("Unable to map remote voices; falling back to static defaults")
         return []
 
     def _fetch_voices(self) -> List[Dict[str, Any]]:
@@ -168,15 +178,12 @@ class VoiceListApplication:
         labels = voice.get("labels") if isinstance(voice.get("labels"), dict) else {}
         quality = str(labels.get("quality") or "").lower()
         if TARGET_QUALITIES:
-            if quality:
-                if quality not in TARGET_QUALITIES:
-                    return False
-            else:
+            if not quality or quality not in TARGET_QUALITIES:
                 return False
 
         language = str(labels.get("language") or voice.get("language") or "").lower()
-        if TARGET_LANGUAGES and language:
-            if not any(lang in language for lang in TARGET_LANGUAGES):
+        if TARGET_LANGUAGES:
+            if not language or not any(lang in language for lang in TARGET_LANGUAGES):
                 return False
 
         type_candidates = self._collect_type_candidates(voice, labels)
@@ -249,6 +256,18 @@ class VoiceListApplication:
                 if mapped:
                     normalized.append(mapped)
         return normalized
+
+    def _top_results(self, entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        selected: List[Dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            mapped = self._map_voice(entry)
+            if mapped:
+                selected.append(mapped)
+            if len(selected) >= MAX_RESULTS:
+                break
+        return selected
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:  # pragma: no cover - AWS entry
