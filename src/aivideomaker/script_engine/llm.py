@@ -15,6 +15,20 @@ class LLMClient(abc.ABC):
     def complete(self, prompt: str, **kwargs: Any) -> str:
         raise NotImplementedError
 
+    def complete_with_images(self, prompt: str, images: list[tuple[str, str]], **kwargs: Any) -> str:
+        """
+        Complete a prompt with attached images.
+        
+        Args:
+            prompt: The text prompt.
+            images: A list of (mime_type, base64_data) tuples.
+            **kwargs: Additional arguments for the LLM.
+            
+        Returns:
+            The generated text response.
+        """
+        raise NotImplementedError("This LLM provider does not support image inputs")
+
 
 class EchoLLM(LLMClient):
     """Development stub that simply bounces prompts back."""
@@ -97,6 +111,44 @@ class ClaudeLLM(LLMClient):
                 "Claude response truncated by max_tokens; consider increasing limit (current=%s)",
                 params.get("max_tokens"),
             )
+        return _collect_text(response.content)
+
+    def complete_with_images(self, prompt: str, images: list[tuple[str, str]], **kwargs: Any) -> str:
+        content: list[dict[str, Any]] = []
+        
+        # Add images first
+        for mime_type, data in images:
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime_type,
+                    "data": data,
+                },
+            })
+            
+        # Add text prompt
+        content.append({
+            "type": "text",
+            "text": prompt,
+        })
+
+        params: dict[str, Any] = {
+            "model": self.model,
+            "system": kwargs.pop("system", self.system_prompt),
+            "max_tokens": kwargs.pop(
+                "max_tokens", kwargs.pop("max_output_tokens", self.max_tokens)
+            ),
+            "temperature": kwargs.pop("temperature", self.temperature),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ],
+        }
+        params.update(kwargs)
+        response = self.client.messages.create(**params)
         return _collect_text(response.content)
 
 

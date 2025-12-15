@@ -7,6 +7,7 @@ from aivideomaker.article_ingest.model import ArticleBundle
 from aivideomaker.chunker.model import ChunkPlan
 from aivideomaker.script_engine.model import Beat, BeatQCRules, BeatVisualSpec, ScriptPlan
 
+from aivideomaker.chart_planner.models import ChartPlan
 from .model import MediaPrompt, MediaPromptBundle, VoiceDirective
 
 
@@ -82,7 +83,14 @@ class MediaPromptBuilder:
         self.lens_hint: str | None = self.visual_style.get("lens")
         self.palette: str | None = self.visual_style.get("palette")
 
-    def build(self, article: ArticleBundle, script: ScriptPlan, chunks: ChunkPlan) -> MediaPromptBundle:
+    def build(
+        self,
+        article: ArticleBundle,
+        script: ScriptPlan,
+        chunks: ChunkPlan,
+        chart_plan: Optional[ChartPlan] = None,
+        chart_assignments: Optional[dict[str, str]] = None,
+    ) -> MediaPromptBundle:
         beat_map = {beat.id: beat for beat in script.beats}
         media_prompts = []
         for index, chunk in enumerate(chunks.chunks):
@@ -107,6 +115,14 @@ class MediaPromptBuilder:
             if force_sora:
                 render_mode = "sora_clip"
             visual_spec = beat_for_prompt.visual
+            
+            reference_images: list[str] = []
+            if chart_plan and chart_assignments and beat.id in chart_assignments:
+                chart_id = chart_assignments[beat.id]
+                chart = next((c for c in chart_plan.charts if c.id == chart_id), None)
+                if chart and chart.image_path:
+                    reference_images.append(chart.image_path)
+
             media_prompts.append(
                 MediaPrompt(
                     chunk_id=getattr(chunk, "id", chunk.beat_id),
@@ -120,6 +136,7 @@ class MediaPromptBuilder:
                     render_mode=render_mode,
                     chart_spec_id=(getattr(visual_spec, "spec_id", None) if visual_spec and not force_sora else None),
                     chart_variant=(getattr(visual_spec, "chart_variant", None) if visual_spec and not force_sora else None),
+                    reference_images=reference_images,
                 )
             )
         return MediaPromptBundle(article_slug=article.article.metadata.slug, media_prompts=media_prompts)

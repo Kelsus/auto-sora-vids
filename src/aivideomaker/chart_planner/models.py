@@ -29,6 +29,10 @@ class ChartIdea(BaseModel):
         default=None,
         description="Pre-generated prompt for OpenAI code interpreter; optional because we can build it later.",
     )
+    image_path: Optional[str] = Field(
+        default=None,
+        description="Absolute path to a user-provided image file for this chart.",
+    )
 
     def keyword_set(self) -> set[str]:
         return {token.lower() for token in self.keywords if token}

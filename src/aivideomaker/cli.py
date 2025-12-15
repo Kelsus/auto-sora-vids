@@ -62,6 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["docu_reveal", "how_to", "listicle", "first_person"],
         help="Narrative style preset for the script planning prompt",
     )
+    parser.add_argument(
+        "--images",
+        nargs="+",
+        type=Path,
+        help="List of local image files to insert into the video",
+    )
     return parser
 
 
@@ -82,6 +88,8 @@ def main() -> None:
         overrides["video_length"] = args.video_length
     if args.video_style:
         overrides["video_style"] = args.video_style
+    if args.images:
+        overrides["input_images"] = args.images
     if overrides:
         config = config.model_copy(update=overrides)
 

@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from aivideomaker.article_ingest.model import ArticleBundle, ArticleDocument, ArticleMetadata, slugify
 from aivideomaker.chart_planner import ChartAssigner, ChartPlan, ChartPlanner, ChartIdea
 from aivideomaker.article_ingest.service import ArticleIngestor
+from aivideomaker.chart_planner.image_ingestor import ImageIngestor
 from aivideomaker.chunker.model import ChunkPlan
 from aivideomaker.chunker.planner import ChunkPlanner
 from aivideomaker.prompt_builder.builder import MediaPromptBuilder
@@ -203,6 +204,7 @@ class PipelineConfig(BaseModel):
     openai_assistant_id: Optional[str] = None
     video_length: str = "90s"
     video_style: str = "docu_reveal"
+    input_images: list[Path] = Field(default_factory=list)
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineConfig":
@@ -295,6 +297,7 @@ class PipelineOrchestrator:
     llm: Optional[LLMClient] = None
     chart_planner: Optional[ChartPlanner] = None
     chart_assigner: Optional[ChartAssigner] = None
+    image_ingestor: Optional[ImageIngestor] = None
     length_profile: VideoLengthProfile = field(default_factory=lambda: get_length_profile(None))
     style_directive: NarrativeStyleDirective = field(default_factory=lambda: get_style_directive(None))
 
@@ -399,6 +402,7 @@ class PipelineOrchestrator:
             excerpt_chars=config.chart_analysis_excerpt_chars,
         )
         chart_assigner = ChartAssigner()
+        image_ingestor = ImageIngestor(llm=llm_client)
         chart_renderer = ChartRenderer(placeholder_root / "charts")
         openai_chart_client: Optional[OpenAIChartClient] = None
         if config.enable_openai_charts:
@@ -457,6 +461,7 @@ class PipelineOrchestrator:
             llm=llm_client,
             chart_planner=chart_planner,
             chart_assigner=chart_assigner,
+            image_ingestor=image_ingestor,
             length_profile=length_profile,
             style_directive=style_directive,
         )
@@ -1000,7 +1005,13 @@ class PipelineOrchestrator:
         chunks = self.chunk_planner.plan(script, alignment=alignment_payload)
 
         logger.info("🛠️  Building structured prompts")
-        prompts = self.prompt_builder.build(article, script, chunks)
+        prompts = self.prompt_builder.build(
+            article,
+            script,
+            chunks,
+            chart_plan=chart_plan,
+            chart_assignments=chart_assignments,
+        )
 
         style_bible = (
             self.style_template.style_bible.model_copy()
@@ -1587,6 +1598,31 @@ class PipelineOrchestrator:
             "media_dir": media_dir,
         }
 
+    @staticmethod
+    def _resolve_bundle_path(bundle_path: Path | str | None, run_dir: Path) -> Path | None:
+        """Resolve a path from a serialized bundle to the current run directory.
+
+        When bundles are resumed on a different machine or with a different job_id,
+        the stored absolute paths may not exist. This method attempts to locate the
+        file by extracting the relative portion (starting from 'media/' or 'exports/')
+        and resolving it against the current run directory.
+        """
+        if bundle_path is None:
+            return None
+        path = Path(bundle_path)
+        if path.exists():
+            return path
+        # Try to extract relative portion from the stored path
+        parts = path.parts
+        for anchor in ("media", "exports"):
+            if anchor in parts:
+                idx = parts.index(anchor)
+                relative = Path(*parts[idx:])
+                candidate = run_dir / relative
+                if candidate.exists():
+                    return candidate
+        return path
+
     def _write_social_caption(
         self,
         caption: SocialCaption,
@@ -1695,17 +1731,21 @@ class PipelineOrchestrator:
                 caption_path = candidate
 
         narration_asset: NarrationAsset | None = None
-        music_track = bundle.music_track
+        music_track = self._resolve_bundle_path(bundle.music_track, run_dirs["run_dir"])
         if bundle.narration_audio:
             if bundle.voice_transcript:
-                transcript_path = Path(bundle.voice_transcript)
+                transcript_path = self._resolve_bundle_path(bundle.voice_transcript, run_dirs["run_dir"])
+                if transcript_path is None:
+                    transcript_path = Path(bundle.voice_transcript)
             else:
                 transcript_dir = self.voice_manager.base_dir / "default"
                 transcript_dir.mkdir(parents=True, exist_ok=True)
                 transcript_path = transcript_dir / "transcript.txt"
                 transcript_path.write_text(bundle.script.full_transcript, encoding="utf-8")
-            audio_path = Path(bundle.narration_audio)
-            alignment_path = Path(bundle.narration_alignment) if bundle.narration_alignment else None
+            audio_path = self._resolve_bundle_path(bundle.narration_audio, run_dirs["run_dir"])
+            if audio_path is None:
+                audio_path = Path(bundle.narration_audio)
+            alignment_path = self._resolve_bundle_path(bundle.narration_alignment, run_dirs["run_dir"])
             narration_asset = NarrationAsset(
                 transcript_path=transcript_path,
                 audio_path=audio_path,
