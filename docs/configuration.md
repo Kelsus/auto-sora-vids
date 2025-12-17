@@ -13,7 +13,7 @@ available options and provides a sample configuration you can copy to
   "data_root": "data/runs",
   "voice_id": "cameo_investigator",
   "llm_provider": "claude",
-  "llm_model": "claude-sonnet-4-5",
+  "llm_model": "claude-opus-4-5",
   "anthropic_api_key_env": "ANTHROPIC_API_KEY",
   "media_provider": "sora",
   "negative_prompt": "no subtitles, no captions, no on-screen text, no watermark",

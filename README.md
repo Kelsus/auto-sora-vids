@@ -33,7 +33,7 @@ src/aivideomaker/
    source .venv/bin/activate
    pip install -e .
    ```
-2. **Configure Claude Sonnet 4.5 access:**
+2. **Configure Claude Opus 4.5 access:**
    ```bash
    export ANTHROPIC_API_KEY="sk-ant-..."
    ```
@@ -97,7 +97,7 @@ You can supply a JSON or YAML config to override the data root, voice, or Claude
   "sora_model": "sora-2",
   "sora_size": "1280x720",
   "llm_provider": "claude",
-  "llm_model": "claude-sonnet-4-5",
+  "llm_model": "claude-opus-4-5",
   "anthropic_api_key_env": "ANTHROPIC_API_KEY",
   "sora_api_key_env": "OPENAI_API_KEY",
   "video_length": "90s",

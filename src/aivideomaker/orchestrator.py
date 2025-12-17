@@ -144,7 +144,7 @@ class PipelineConfig(BaseModel):
     data_root: Path = Path("data/runs")
     voice_id: Optional[str] = None
     llm_provider: str = "claude"
-    llm_model: str = "claude-sonnet-4-5"
+    llm_model: str = "claude-opus-4-5"
     anthropic_api_key_env: str = "ANTHROPIC_API_KEY"
     media_provider: str = "sora"
     negative_prompt: Optional[str] = "no subtitles, no captions, no on-screen text, no watermark"

@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 
 
 class ClaudeLLM(LLMClient):
-    """Claude Sonnet 4.5 wrapper using the Anthropics Messages API."""
+    """Claude Opus 4.5 wrapper using the Anthropic Messages API."""
 
     def __init__(
         self,
