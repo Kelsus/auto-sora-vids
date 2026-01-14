@@ -11,6 +11,10 @@ from .models import ChartIdea, ChartPlan
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9']+")
 
+# Minimum score required for a chart to be assigned to a beat.
+# This prevents weak/forced chart assignments when keyword overlap is minimal.
+MIN_CHART_ASSIGNMENT_SCORE = 4.0
+
 
 @dataclass(frozen=True)
 class ChartAssignment:
@@ -66,6 +70,10 @@ class ChartAssigner:
             if score > best_score:
                 best_score = score
                 best_id = beat.id
+
+        # Reject assignment if the best score is below threshold - prevents forced/weak assignments
+        if best_score < MIN_CHART_ASSIGNMENT_SCORE:
+            return None
 
         return best_id
 

@@ -17,7 +17,7 @@ _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 
 
 class ChartPlanner:
-    def __init__(self, llm: LLMClient, *, max_charts: int = 5, excerpt_chars: int = 2600) -> None:
+    def __init__(self, llm: LLMClient, *, max_charts: int = 2, excerpt_chars: int = 2600) -> None:
         self.llm = llm
         self.max_charts = max_charts
         self.excerpt_chars = excerpt_chars
@@ -43,6 +43,14 @@ class ChartPlanner:
                 continue
             if not idea.data_points:
                 logger.debug("Skipping chart %s because it lacks data points", idea.id)
+                continue
+            # Require at least 3 data points for a chart to be meaningful
+            if len(idea.data_points) < 3:
+                logger.debug(
+                    "Skipping chart %s because it has only %d data points (minimum 3 required)",
+                    idea.id,
+                    len(idea.data_points),
+                )
                 continue
             charts.append(idea)
 

@@ -78,7 +78,8 @@ class ClaudeLLM(LLMClient):
         self.model = model
         self.system_prompt = system_prompt or (
             "You are an investigative video writer. You craft suspenseful but factual narratives, "
-            "introducing controversy early, delaying context responsibly, and returning structured JSON responses."
+            "introducing controversy early, delaying context responsibly, and returning structured JSON responses. "
+            "Write with crisp, journalistic clarity; avoid corny marketing/clickbait phrasing and canned tease lines."
         )
         self.max_tokens = max_tokens
         self.temperature = temperature

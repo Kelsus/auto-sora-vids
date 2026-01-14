@@ -57,6 +57,7 @@ def test_render_planning_prompt_injects_style_and_runtime() -> None:
     )
     assert "How-To Explainer" in prompt
     assert "Target runtime: ~15 seconds" in prompt
+    assert "Avoid corny marketing copy" in prompt
     assert "Label beats sequentially" in prompt
 
 

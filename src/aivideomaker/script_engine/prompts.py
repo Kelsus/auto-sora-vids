@@ -19,13 +19,20 @@ if TYPE_CHECKING:
 
 SCRIPT_PLANNING_PROMPT = dedent(
     """
-    You are a provessional video script writer capable of writing captivating scripts across a variety of genres and styles. 
-    Turn the provided article into a video script that is tailored to the requested style and length profile,
-    that hooks the viewer by either revealing a compeling promise or creating a narrative that slowly lets out
-    information depending on the style of video you're creating. Make sure to stay true to the article's content and do not
-    becoming misleading.
+    You are a professional video script writer capable of sharp, high-trust narration across a variety of genres and styles.
+    Turn the provided article into a video script tailored to the requested style and length profile.
+    Hook the viewer with specificity: a concrete stake, a surprising fact, a clear question, or a vivid scene.
+    Stay true to the article's content and do not become misleading.
 
 {style_block}
+
+    Writing rules (important):
+    - Avoid corny marketing copy, influencer tease language, and canned transition phrases.
+    - Do not use lines like: "And here's the crux", "But here's what they're not telling you", "Here's the thing",
+      "Here's the problem", "Here's the catch", "You won't believe", "What happens next", "This changes everything",
+      "Let that sink in", "Spoiler alert".
+    - Prefer short, concrete sentences. Use specific nouns/verbs over hype. No vague "shocking", "wild", "insane" unless the article uses them.
+    - If you add suspense, do it with verified facts and pacing—not insinuation.
 
     When you cite a fact or metric, lightly attribute its origin—reference the publication, dataset, research team,
     or institution in natural language (e.g., "According to Supply Chain Dive" or "Researchers at MIT found...").
@@ -59,6 +66,7 @@ Runtime + pacing guardrails:
     {excerpt}
 {revision_context_block}
     Please respond with JSON using this schema:
+    Label beats sequentially (e.g., "beat_1", "beat_2", ...), and keep ids stable across revisions when possible.
     {{
       "premise": string,
       "controversy_summary": string,
@@ -174,8 +182,8 @@ REVIEW_PROMPT_TEMPLATE = dedent(
     - Source: {source}
     - Published: {published}
 
-    Article synopsis:
-    {synopsis}
+    Full article text:
+    {article_text}
 
     Script plan (JSON):
     {script_json}
@@ -199,11 +207,9 @@ REVIEW_PROMPT_TEMPLATE = dedent(
 )
 
 
-def render_review_prompt(
-    article: ArticleBundle, script: ScriptPlan, synopsis_chars: int = 800
-) -> str:
+def render_review_prompt(article: ArticleBundle, script: ScriptPlan) -> str:
     article_meta = article.article.metadata
-    synopsis = article.article.text[:synopsis_chars].strip()
+    article_text = article.article.text.strip()
     script_payload = script.model_dump(mode="json")
     script_json = json.dumps(script_payload, indent=2)
     return REVIEW_PROMPT_TEMPLATE.format(
@@ -211,6 +217,6 @@ def render_review_prompt(
         byline=article_meta.byline or "Unknown",
         source=article_meta.source or "Unknown",
         published=article_meta.published_at or "Unknown",
-        synopsis=synopsis or "Synopsis unavailable.",
+        article_text=article_text or "Article text unavailable.",
         script_json=indent(script_json, "  "),
     )

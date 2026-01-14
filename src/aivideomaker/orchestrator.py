@@ -19,6 +19,7 @@ from aivideomaker.article_ingest.model import ArticleBundle, ArticleDocument, Ar
 from aivideomaker.chart_planner import ChartAssigner, ChartPlan, ChartPlanner, ChartIdea
 from aivideomaker.article_ingest.service import ArticleIngestor
 from aivideomaker.chart_planner.image_ingestor import ImageIngestor
+from aivideomaker.user_images import UserImageAssigner, UserImageAsset, UserImageIngestor, UserImagePlan
 from aivideomaker.chunker.model import ChunkPlan
 from aivideomaker.chunker.planner import ChunkPlanner
 from aivideomaker.prompt_builder.builder import MediaPromptBuilder
@@ -167,6 +168,7 @@ class PipelineConfig(BaseModel):
     music_request_timeout: float = 120.0
     enable_script_review: bool = True
     require_human_approval: bool = True
+    max_script_revision_attempts: int = 3
     # Sora configuration
     sora_model: str = "sora-2"
     sora_size: str = "720x1280"
@@ -265,6 +267,11 @@ class PipelineBundle(BaseModel):
     qc_ruleset: Optional[QualityControlRuleSet] = None
     chart_plan: Optional[ChartPlan] = None
     chart_assignments: dict[str, str] = Field(default_factory=dict, description="Mapping of beat ids to chart ids")
+    user_image_plan: Optional[UserImagePlan] = None
+    user_image_assignments: dict[str, str] = Field(
+        default_factory=dict,
+        description="Mapping of beat ids to user image ids",
+    )
 
 
 class PromptGenerationResult(BaseModel):
@@ -298,6 +305,8 @@ class PipelineOrchestrator:
     chart_planner: Optional[ChartPlanner] = None
     chart_assigner: Optional[ChartAssigner] = None
     image_ingestor: Optional[ImageIngestor] = None
+    user_image_ingestor: Optional[UserImageIngestor] = None
+    user_image_assigner: Optional[UserImageAssigner] = None
     length_profile: VideoLengthProfile = field(default_factory=lambda: get_length_profile(None))
     style_directive: NarrativeStyleDirective = field(default_factory=lambda: get_style_directive(None))
 
@@ -314,6 +323,7 @@ class PipelineOrchestrator:
         placeholder_root = data_root / ".placeholder"
         length_profile = config.resolve_length_profile()
         style_directive = config.resolve_style_directive()
+        suppress_charts = bool(config.input_images)
 
         provider = config.media_provider.lower()
         if provider == "sora":
@@ -396,44 +406,56 @@ class PipelineOrchestrator:
             if style_template and style_template.style_bible
             else None
         )
-        chart_planner = ChartPlanner(
-            llm=llm_client,
-            max_charts=config.max_automatic_charts,
-            excerpt_chars=config.chart_analysis_excerpt_chars,
-        )
-        chart_assigner = ChartAssigner()
-        image_ingestor = ImageIngestor(llm=llm_client)
-        chart_renderer = ChartRenderer(placeholder_root / "charts")
-        openai_chart_client: Optional[OpenAIChartClient] = None
-        if config.enable_openai_charts:
-            try:
-                openai_chart_client = OpenAIChartClient(
-                    model=config.openai_chart_model,
-                    api_key_env=config.openai_api_key_env,
-                    assistant_id=config.openai_assistant_id,
-                )
-            except Exception as exc:
-                logger.warning("OpenAI chart client disabled due to initialization error: %s", exc)
-                openai_chart_client = None
-
-        # Initialize Gemini Image client for chart composition
-        gemini_image_client = None
-        try:
-            from aivideomaker.media_pipeline.gemini_image_client import GeminiImageClient
-            
-            gemini_image_client = GeminiImageClient(
-                output_dir=None,  # Will be set per-run
-                api_key=os.getenv(config.gemini_api_key_env) if not config.gemini_use_vertex else None,
-                model=config.gemini_image_model,
-                use_vertex=config.gemini_use_vertex,
-                project=config.gemini_project or config.veo_project,  # Reuse veo project if not specified
-                location=config.gemini_location,
-                credentials_path=config.gemini_credentials_path or config.veo_credentials_path,
-            )
-            logger.info("Initialized Gemini Image client for chart composition")
-        except Exception as exc:
-            logger.warning("Gemini Image client disabled due to initialization error: %s", exc)
+        if suppress_charts:
+            logger.info("🛑  User images provided; suppressing automatic chart planning/rendering.")
+            chart_planner = None
+            chart_assigner = None
+            chart_renderer = None
+            openai_chart_client = None
             gemini_image_client = None
+            image_ingestor = None
+        else:
+            chart_planner = ChartPlanner(
+                llm=llm_client,
+                max_charts=config.max_automatic_charts,
+                excerpt_chars=config.chart_analysis_excerpt_chars,
+            )
+            chart_assigner = ChartAssigner()
+            image_ingestor = ImageIngestor(llm=llm_client)
+            chart_renderer = ChartRenderer(placeholder_root / "charts")
+            openai_chart_client: Optional[OpenAIChartClient] = None
+            if config.enable_openai_charts:
+                try:
+                    openai_chart_client = OpenAIChartClient(
+                        model=config.openai_chart_model,
+                        api_key_env=config.openai_api_key_env,
+                        assistant_id=config.openai_assistant_id,
+                    )
+                except Exception as exc:
+                    logger.warning("OpenAI chart client disabled due to initialization error: %s", exc)
+                    openai_chart_client = None
+
+            # Initialize Gemini Image client for chart composition
+            gemini_image_client = None
+            try:
+                from aivideomaker.media_pipeline.gemini_image_client import GeminiImageClient
+
+                gemini_image_client = GeminiImageClient(
+                    output_dir=None,  # Will be set per-run
+                    api_key=os.getenv(config.gemini_api_key_env) if not config.gemini_use_vertex else None,
+                    model=config.gemini_image_model,
+                    use_vertex=config.gemini_use_vertex,
+                    project=config.gemini_project or config.veo_project,  # Reuse veo project if not specified
+                    location=config.gemini_location,
+                    credentials_path=config.gemini_credentials_path or config.veo_credentials_path,
+                )
+                logger.info("Initialized Gemini Image client for chart composition")
+            except Exception as exc:
+                logger.warning("Gemini Image client disabled due to initialization error: %s", exc)
+                gemini_image_client = None
+
+        user_image_ingestor = UserImageIngestor(llm=llm_client)
+        user_image_assigner = UserImageAssigner()
 
         orchestrator = cls(
             config=config,
@@ -462,6 +484,8 @@ class PipelineOrchestrator:
             chart_planner=chart_planner,
             chart_assigner=chart_assigner,
             image_ingestor=image_ingestor,
+            user_image_ingestor=user_image_ingestor,
+            user_image_assigner=user_image_assigner,
             length_profile=length_profile,
             style_directive=style_directive,
         )
@@ -858,6 +882,7 @@ class PipelineOrchestrator:
         external_review: ScriptReviewDecision | None = None,
         article_override: Mapping[str, Any] | None = None,
     ) -> PipelineBundle:
+        charts_allowed = not bool(self.config.input_images)
         logger.info("📰  Ingesting article: %s", article_url)
         if article_override:
             article = self._bundle_from_override(article_url, article_override)
@@ -869,7 +894,7 @@ class PipelineOrchestrator:
 
         chart_plan: ChartPlan | None = None
         chart_outline: str | None = None
-        if self.chart_planner:
+        if charts_allowed and self.chart_planner:
             try:
                 chart_plan = self.chart_planner.analyze_article(article)
                 if chart_plan and not chart_plan.is_empty():
@@ -886,6 +911,7 @@ class PipelineOrchestrator:
         previous_script_attempt: ScriptPlan | None = None
         script_greenlit = not self.config.enable_script_review
         human_approval: bool | None = None
+        revision_attempt = 0
         while True:
             logger.info("✍️  Generating suspenseful script")
             script = self.script_engine.generate_script(
@@ -905,10 +931,12 @@ class PipelineOrchestrator:
                     message = self._format_review_failure(review_decision)
                     print(f"\n{message}\n")
                     if self._should_regenerate_script(
-                        "Automated reviewer did not approve the script. Generate again? (y/n): "
+                        "Automated reviewer did not approve the script. Generate again? (y/n): ",
+                        attempt=revision_attempt,
                     ):
                         previous_script_attempt = script
                         pending_review_feedback = review_decision
+                        revision_attempt += 1
                         continue
                     pending_review_feedback = None
                     previous_script_attempt = script
@@ -922,9 +950,11 @@ class PipelineOrchestrator:
                 approved = self._require_human_approval(script, review_decision)
                 if not approved:
                     if self._should_regenerate_script(
-                        "Human reviewer rejected the script. Generate again? (y/n): "
+                        "Human reviewer rejected the script. Generate again? (y/n): ",
+                        attempt=revision_attempt,
                     ):
                         previous_script_attempt = script
+                        revision_attempt += 1
                         continue
                     script_greenlit = False
                 human_approval = approved
@@ -935,10 +965,20 @@ class PipelineOrchestrator:
 
             if self.style_template:
                 script = self._apply_style_template(script)
+            if not charts_allowed:
+                script = self._strip_chart_visuals(script)
             break
 
         chart_assignments: dict[str, str] = {}
-        if self.chart_assigner and chart_plan and not chart_plan.is_empty():
+        if charts_allowed and self.config.input_images and chart_plan and not chart_plan.is_empty():
+            # Reserve beats for user-provided images so they can appear in the video.
+            # We limit automatic charts to ensure there are at least N non-chart beats
+            # available where N == len(input_images).
+            max_chart_beats = max(0, len(script.beats) - len(self.config.input_images))
+            if len(chart_plan.charts) > max_chart_beats:
+                chart_plan = chart_plan.model_copy(update={"charts": chart_plan.charts[:max_chart_beats]})
+
+        if charts_allowed and self.chart_assigner and chart_plan and not chart_plan.is_empty():
             try:
                 script, assignments = self.chart_assigner.assign(chart_plan, script)
                 chart_assignments = {assignment.beat_id: assignment.chart_id for assignment in assignments}
@@ -948,6 +988,41 @@ class PipelineOrchestrator:
 
         if chart_assignments:
             script = self._downgrade_unassigned_chart_beats(script, chart_assignments)
+
+        user_image_plan: UserImagePlan | None = None
+        user_image_assignments: dict[str, str] = {}
+        if self.config.input_images and self.user_image_ingestor and self.user_image_assigner:
+            materialized = self._materialize_user_images(
+                list(self.config.input_images),
+                dest_dir=run_dirs["user_images_dir"],
+            )
+            assets = [
+                UserImageAsset(
+                    id=f"user-image-{index}-{slugify(dest.stem)}",
+                    source_uri=str(Path(src).expanduser().resolve()),
+                    materialized_path=str(dest.resolve()),
+                )
+                for index, (src, dest) in enumerate(
+                    zip(self.config.input_images, materialized, strict=True),
+                    start=1,
+                )
+            ]
+            user_image_plan = self.user_image_ingestor.build_plan(assets)
+            script, assignments = self.user_image_assigner.assign(
+                user_image_plan,
+                script,
+                blocked_beats=set(chart_assignments.keys()),
+            )
+            user_image_assignments = {assignment.beat_id: assignment.image_id for assignment in assignments}
+            # Store materialized paths relative to the run directory for portability.
+            rel_images = []
+            for image in user_image_plan.images:
+                rel = self._try_rel_path(Path(image.materialized_path), run_dirs["run_dir"])
+                if rel is not None:
+                    rel_images.append(image.model_copy(update={"materialized_path": str(rel)}))
+                else:
+                    rel_images.append(image)
+            user_image_plan = user_image_plan.model_copy(update={"images": rel_images})
 
         narration_asset: NarrationAsset | None = None
         alignment_payload: dict | None = None
@@ -1009,8 +1084,10 @@ class PipelineOrchestrator:
             article,
             script,
             chunks,
-            chart_plan=chart_plan,
-            chart_assignments=chart_assignments,
+            chart_plan=(chart_plan if charts_allowed else None),
+            chart_assignments=(chart_assignments if charts_allowed else None),
+            user_image_plan=user_image_plan,
+            user_image_assignments=user_image_assignments,
         )
 
         style_bible = (
@@ -1023,15 +1100,17 @@ class PipelineOrchestrator:
             if self.style_template and self.style_template.beats_meta_defaults
             else None
         )
-        chart_specs = (
-            {key: spec.model_copy() for key, spec in self.style_template.chart_specs.items()}
-            if self.style_template and self.style_template.chart_specs
-            else {}
-        )
-        if chart_plan and chart_plan.charts:
-            dynamic_specs = self._build_dynamic_chart_specs(chart_plan)
-            for key, spec in dynamic_specs.items():
-                chart_specs.setdefault(key, spec)
+        chart_specs: dict[str, ChartSpec] = {}
+        if charts_allowed:
+            chart_specs = (
+                {key: spec.model_copy() for key, spec in self.style_template.chart_specs.items()}
+                if self.style_template and self.style_template.chart_specs
+                else {}
+            )
+            if chart_plan and chart_plan.charts:
+                dynamic_specs = self._build_dynamic_chart_specs(chart_plan)
+                for key, spec in dynamic_specs.items():
+                    chart_specs.setdefault(key, spec)
         qc_ruleset = (
             self.style_template.qc_ruleset.model_copy()
             if self.style_template and self.style_template.qc_ruleset
@@ -1058,8 +1137,10 @@ class PipelineOrchestrator:
             beats_meta_defaults=beats_meta_defaults,
             chart_specs=chart_specs,
             qc_ruleset=qc_ruleset,
-            chart_plan=chart_plan,
-            chart_assignments=chart_assignments,
+            chart_plan=(chart_plan if charts_allowed else None),
+            chart_assignments=(chart_assignments if charts_allowed else {}),
+            user_image_plan=user_image_plan,
+            user_image_assignments=user_image_assignments,
         )
 
     def _bundle_from_override(
@@ -1306,7 +1387,40 @@ class PipelineOrchestrator:
     def _resolve_visual_mode(self, beat: Beat | None) -> str:
         if not beat or not beat.visual or not beat.visual.type:
             return "cinematic_broll"
-        return beat.visual.type.lower()
+        visual_type = beat.visual.type.lower()
+        if visual_type == "chart" and self.config.input_images:
+            return "cinematic_broll"
+        return visual_type
+
+    def _strip_chart_visuals(self, script: ScriptPlan) -> ScriptPlan:
+        if not script.beats:
+            return script
+        updated_beats: list[Beat] = []
+        for beat in script.beats:
+            visual = beat.visual
+            if not visual or (visual.type or "").lower() != "chart":
+                updated_beats.append(beat)
+                continue
+            updated_visual = visual.model_copy(
+                update={
+                    "type": "cinematic_broll",
+                    "macro": None,
+                    "spec_id": None,
+                    "chart_variant": None,
+                    "chart_reason": None,
+                    "chart_data_available": None,
+                    "chart_should_render": None,
+                    "chart_duplicates_previous": None,
+                    "chart_title": None,
+                    "chart_subtitle": None,
+                    "chart_x_label": None,
+                    "chart_y_label": None,
+                    "chart_note": None,
+                    "chart_series": None,
+                }
+            )
+            updated_beats.append(beat.model_copy(update={"visual": updated_visual}))
+        return script.model_copy(update={"beats": updated_beats})
 
     def _prepare_chart_image(
         self,
@@ -1394,15 +1508,12 @@ class PipelineOrchestrator:
         
         # Step 3: Generate composite image with Gemini
         if not self.gemini_image_client:
-            logger.warning("⚠️  Gemini Image client not available; cannot compose chart scene for %s", clip_id)
-            # Fallback: just use the chart as reference image
-            ref_images = list(prompt.reference_images)
-            stored_path = self._try_rel_path(chart_path, run_dirs["run_dir"]) or chart_path
-            chart_str = str(stored_path)
-            if chart_str not in ref_images:
-                ref_images.append(chart_str)
-            updates["reference_images"] = ref_images
-            return updates
+            # Don't fall back to raw chart - it causes brief flashes in the video
+            # Raw chart images should never be sent directly to Sora
+            raise RuntimeError(
+                f"Gemini Image client not available; cannot compose chart scene for {clip_id}. "
+                "Chart visuals require Gemini to integrate charts into scenes before sending to Sora."
+            )
         
         # Set output dir for gemini client
         self.gemini_image_client.output_dir = run_dirs["charts_dir"]
@@ -1487,6 +1598,10 @@ class PipelineOrchestrator:
         decision: ScriptReviewDecision | None,
     ) -> bool:
         if not sys.stdin.isatty():
+            # Auto-approve in non-interactive mode if automated review passed (or was disabled)
+            if decision is None or not decision.requires_revision:
+                logger.info("✅  Auto-approving script (non-interactive mode, automated review passed)")
+                return True
             raise RuntimeError(
                 "Human approval is required but no interactive terminal was detected. "
                 "Disable `require_human_approval` in the pipeline config or run from an interactive shell."
@@ -1541,9 +1656,20 @@ class PipelineOrchestrator:
                 return False
             print("Please respond with 'y' or 'n'.")
 
-    def _should_regenerate_script(self, prompt: str) -> bool:
+    def _should_regenerate_script(self, prompt: str, *, attempt: int = 1) -> bool:
+        max_attempts = self.config.max_script_revision_attempts
         if not sys.stdin.isatty():
-            logger.warning("⚠️  Cannot prompt for regeneration without an interactive terminal.")
+            if attempt < max_attempts:
+                logger.info(
+                    "🔄  Auto-regenerating script (attempt %d/%d)",
+                    attempt + 1,
+                    max_attempts,
+                )
+                return True
+            logger.warning(
+                "⚠️  Exhausted %d automatic revision attempts; script requires manual review.",
+                max_attempts,
+            )
             return False
 
         while True:
@@ -1564,11 +1690,12 @@ class PipelineOrchestrator:
         sora_dir = media_dir / "sora_clips"
         veo_dir = media_dir / "veo_clips"
         charts_dir = media_dir / "charts"
+        user_images_dir = media_dir / "user_images"
         voice_dir = media_dir / "voice"
         music_dir = media_dir / "music"
         export_dir = run_dir / "exports"
 
-        for path in (sora_dir, veo_dir, charts_dir, voice_dir, music_dir, export_dir):
+        for path in (sora_dir, veo_dir, charts_dir, user_images_dir, voice_dir, music_dir, export_dir):
             path.mkdir(parents=True, exist_ok=True)
 
         # Update client destinations to new per-run directories
@@ -1592,11 +1719,84 @@ class PipelineOrchestrator:
             "sora_dir": sora_dir,
             "veo_dir": veo_dir,
             "charts_dir": charts_dir,
+            "user_images_dir": user_images_dir,
             "voice_dir": voice_dir,
             "music_dir": music_dir,
             "export_dir": export_dir,
             "media_dir": media_dir,
         }
+
+    def _materialize_user_images(self, image_paths: list[Path], *, dest_dir: Path) -> list[Path]:
+        import mimetypes
+        import subprocess
+
+        if not image_paths:
+            return []
+        if len(image_paths) > 3:
+            raise ValueError(f"At most 3 images may be supplied; received {len(image_paths)}")
+
+        supported_mimes = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        supported_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        materialized: list[Path] = []
+        for index, src in enumerate(image_paths, start=1):
+            src_path = Path(src).expanduser().resolve()
+            if not src_path.exists():
+                raise FileNotFoundError(f"Image path does not exist: {src}")
+            mime, _ = mimetypes.guess_type(src_path.name)
+            if not mime or not mime.startswith("image/"):
+                raise ValueError(f"Unsupported image type for {src_path.name} ({mime})")
+
+            safe_stem = slugify(src_path.stem) or f"image-{index}"
+            suffix = (src_path.suffix or "").lower()
+
+            should_convert = (
+                mime not in supported_mimes
+                or not suffix
+                or suffix not in supported_suffixes
+            )
+
+            if not should_convert:
+                dest = dest_dir / f"user-image-{index}-{safe_stem}{suffix}"
+                shutil.copy2(src_path, dest)
+                materialized.append(dest)
+                continue
+
+            dest = dest_dir / f"user-image-{index}-{safe_stem}.jpg"
+            # Use ffmpeg for broad codec support (e.g., AVIF/HEIC) and downscale
+            # to keep vision payload sizes reasonable for LLM APIs.
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(src_path),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale='min(1600,iw)':'min(1600,ih)':force_original_aspect_ratio=decrease",
+                    "-q:v",
+                    "3",
+                    str(dest),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                raise RuntimeError(
+                    f"Failed to convert {src_path.name} ({mime}) to PNG for processing."
+                    + (f" ffmpeg error: {stderr}" if stderr else "")
+                )
+            if not dest.exists():
+                raise RuntimeError(f"Image conversion produced no output at {dest}")
+            materialized.append(dest)
+
+        return materialized
 
     @staticmethod
     def _resolve_bundle_path(bundle_path: Path | str | None, run_dir: Path) -> Path | None:
@@ -1779,7 +1979,15 @@ class PipelineOrchestrator:
             if should_replan:
                 logger.info("🔁  Recomputing chunk timeline from narration alignment")
                 chunks_plan = self.chunk_planner.plan(bundle.script, alignment=alignment_payload)
-                prompts_bundle = self.prompt_builder.build(bundle.article, bundle.script, chunks_plan)
+                prompts_bundle = self.prompt_builder.build(
+                    bundle.article,
+                    bundle.script,
+                    chunks_plan,
+                    chart_plan=bundle.chart_plan,
+                    chart_assignments=bundle.chart_assignments,
+                    user_image_plan=bundle.user_image_plan,
+                    user_image_assignments=bundle.user_image_assignments,
+                )
 
         if (
             self.music_client
@@ -1821,20 +2029,15 @@ class PipelineOrchestrator:
                     visual_mode = self._resolve_visual_mode(beat)
                     updates: dict[str, Any] = {"render_mode": "sora_clip"}
                     if visual_mode == "chart":
-                        chart_path = self._prepare_chart_image(bundle, beat, run_dirs, clip_id)
-                        if chart_path:
-                            ref_images = list(prompt.reference_images)
-                            stored_path = self._try_rel_path(chart_path, run_dirs["run_dir"]) or chart_path
-                            chart_str = str(stored_path)
-                            if chart_str not in ref_images:
-                                ref_images.append(chart_str)
-                            updates["reference_images"] = ref_images
-                            logger.info("📊  Prepared chart image for %s at %s", clip_id, chart_path)
-                        else:
-                            logger.warning(
-                                "⚠️  Unable to prepare chart image for %s; continuing without attachment",
-                                clip_id,
-                            )
+                        # Use the full chart composition workflow (Gemini) instead of raw chart
+                        logger.info("🎨  Executing chart composition workflow for %s", clip_id)
+                        updates = self._compose_chart_scene(
+                            prompt=prompt,
+                            beat=beat,
+                            bundle=bundle,
+                            run_dirs=run_dirs,
+                            clip_id=clip_id,
+                        )
                     working_prompt = prompt.model_copy(update=updates)
                     bundle = self._bundle_with_prompt(bundle, working_prompt)
                     prompts_bundle = bundle.prompts

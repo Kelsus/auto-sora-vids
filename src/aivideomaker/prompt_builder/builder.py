@@ -8,6 +8,7 @@ from aivideomaker.chunker.model import ChunkPlan
 from aivideomaker.script_engine.model import Beat, BeatQCRules, BeatVisualSpec, ScriptPlan
 
 from aivideomaker.chart_planner.models import ChartPlan
+from aivideomaker.user_images.models import UserImagePlan
 from .model import MediaPrompt, MediaPromptBundle, VoiceDirective
 
 
@@ -90,6 +91,8 @@ class MediaPromptBuilder:
         chunks: ChunkPlan,
         chart_plan: Optional[ChartPlan] = None,
         chart_assignments: Optional[dict[str, str]] = None,
+        user_image_plan: Optional[UserImagePlan] = None,
+        user_image_assignments: Optional[dict[str, str]] = None,
     ) -> MediaPromptBundle:
         beat_map = {beat.id: beat for beat in script.beats}
         media_prompts = []
@@ -122,6 +125,12 @@ class MediaPromptBuilder:
                 chart = next((c for c in chart_plan.charts if c.id == chart_id), None)
                 if chart and chart.image_path:
                     reference_images.append(chart.image_path)
+
+            if not reference_images and user_image_plan and user_image_assignments and beat.id in user_image_assignments:
+                image_id = user_image_assignments[beat.id]
+                image = next((img for img in user_image_plan.images if img.id == image_id), None)
+                if image and image.materialized_path:
+                    reference_images.append(image.materialized_path)
 
             media_prompts.append(
                 MediaPrompt(
@@ -176,6 +185,7 @@ class MediaPromptBuilder:
         if visual_spec:
             shot_instructions.extend(self._visual_type_instructions(visual_spec))
         shot_instructions.append("Vertical 9:16 frame, cinematic realism.")
+        shot_instructions.extend(self._common_sense_motion_instructions(beat))
 
         if self.lens_hint:
             shot_instructions.append(f"Use lensing akin to {self.lens_hint}.")
@@ -259,6 +269,7 @@ class MediaPromptBuilder:
             required_negatives.extend(["text", "captions", "subtitles"])
         if qc is None or not qc.allow_numbers:
             required_negatives.extend(["numbers", "digits", "charts"])
+        required_negatives.extend(self._common_sense_motion_negatives(beat))
 
         current_negatives = []
         if negative_prompt:
@@ -310,6 +321,47 @@ class MediaPromptBuilder:
                 "Use light particles or soft gradients to imply information flow.",
             ]
         return []
+
+    def _common_sense_motion_instructions(self, beat: Beat) -> list[str]:
+        rules = [
+            "Common-sense physical realism: consistent mechanics and continuity from frame to frame.",
+            "No impossible motion, no time reversal, no duplicated parts or jittery contradictory movement.",
+        ]
+        if self._mentions_timepiece(beat):
+            rules.extend(
+                [
+                    "If a watch/clock face appears: a single set of hands; hands move smoothly forward (clockwise) at a plausible speed.",
+                    "No counterclockwise spinning, no doubled second hand, no duplicated hour/minute hands.",
+                ]
+            )
+        return rules
+
+    def _common_sense_motion_negatives(self, beat: Beat) -> list[str]:
+        negatives = [
+            "impossible physics",
+            "time reversal",
+            "duplicated parts",
+        ]
+        if self._mentions_timepiece(beat):
+            negatives.extend(
+                [
+                    "counterclockwise clock hands",
+                    "double second hand",
+                    "duplicated watch hands",
+                ]
+            )
+        return negatives
+
+    def _mentions_timepiece(self, beat: Beat) -> bool:
+        haystack = " ".join(
+            [
+                beat.purpose or "",
+                beat.transcript or "",
+                beat.visual_seed or "",
+            ]
+        ).lower()
+        tokens = ("watch", "watches", "clock", "clocks", "timepiece", "dial", "hour hand", "minute hand", "second hand")
+        return any(token in haystack for token in tokens)
 
     @staticmethod
     def _extend_unique(target: list[str], items: Iterable[str]) -> None:
