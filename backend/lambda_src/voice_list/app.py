@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import boto3
@@ -15,7 +17,11 @@ from job_list.http import cors_preflight_response, ok, server_error
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-VOICE_API_URL = os.environ.get("ELEVEN_LABS_VOICE_API_URL", "https://api.elevenlabs.io/v1/voices")
+# Use v1/shared-voices endpoint to access the full voice library (10,000+ community voices)
+VOICE_API_URL = os.environ.get("ELEVEN_LABS_VOICE_API_URL", "https://api.elevenlabs.io/v1/shared-voices")
+PAGE_SIZE = 100  # Max allowed by ElevenLabs API
+PAGES_TO_SKIP = int(os.environ.get("VOICE_LIST_PAGES_TO_SKIP", "0"))  # 0 = random (0-8)
+PAGES_TO_FETCH = int(os.environ.get("VOICE_LIST_PAGES_TO_FETCH", "2"))  # How many pages to collect
 
 
 def _parse_filter(var_name: str) -> set[str]:
@@ -25,9 +31,15 @@ def _parse_filter(var_name: str) -> set[str]:
 
 TARGET_LANGUAGES: set[str] = _parse_filter("VOICE_LIST_LANGUAGES")
 TARGET_QUALITIES: set[str] = _parse_filter("VOICE_LIST_QUALITIES")
-TARGET_TYPES: set[str] = _parse_filter("VOICE_LIST_TYPES") or {"high_quality"}
+TARGET_TYPES: set[str] = _parse_filter("VOICE_LIST_TYPES") or {
+    "high_quality",
+    "narrative",
+    "story",
+    "conversational",
+}
 MAX_RESULTS = 60
 MIN_RESULTS = max(1, int(os.environ.get("VOICE_LIST_MIN_RESULTS", "15")))
+SHUFFLE_VOICES = os.environ.get("VOICE_LIST_SHUFFLE", "true").lower() == "true"
 
 DEFAULT_FALLBACK_VOICES: List[Dict[str, Any]] = [
     {
@@ -94,6 +106,10 @@ class VoiceListApplication:
                 raise VoiceListPermissionError("ElevenLabs API rejected credentials") from exc
             raise
         logger.info("Fetched %s voices from ElevenLabs", len(raw_voices))
+
+        if SHUFFLE_VOICES:
+            raw_voices = list(raw_voices)
+            random.shuffle(raw_voices)
         filtered: List[Dict[str, Any]] = []
         for entry in raw_voices:
             if not isinstance(entry, dict):
@@ -121,29 +137,71 @@ class VoiceListApplication:
         return []
 
     def _fetch_voices(self) -> List[Dict[str, Any]]:
+        """Fetch voices from ElevenLabs shared voice library with pagination.
+
+        Uses random page offset for variety, then collects PAGES_TO_FETCH pages.
+        The shared-voices endpoint uses page numbers (not tokens) for pagination.
+        """
         api_key = self._resolve_api_key()
-        request = Request(VOICE_API_URL, headers={"xi-api-key": api_key})
-        try:
-            with urlopen(request, timeout=10) as response:  # nosec B310
-                payload = response.read().decode("utf-8")
-        except HTTPError as exc:
-            logger.error("ElevenLabs voices request failed: %s", exc)
-            raise
-        except URLError as exc:
-            logger.error("Unable to reach ElevenLabs API: %s", exc)
-            raise
 
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            logger.error("Failed to parse ElevenLabs response: %s", exc)
-            raise
+        # Determine starting page (random offset for variety)
+        # The shared-voices library has many pages, randomize starting point
+        start_page = PAGES_TO_SKIP if PAGES_TO_SKIP > 0 else random.randint(0, 50)
+        logger.info("Pagination: starting at page %d, fetching %d pages", start_page, PAGES_TO_FETCH)
 
-        voices = data.get("voices")
-        if isinstance(voices, list):
-            return [entry for entry in voices if isinstance(entry, dict)]
-        logger.warning("Unexpected ElevenLabs response shape: %s", type(voices))
-        return []
+        all_voices: List[Dict[str, Any]] = []
+        pages_collected = 0
+
+        for page_offset in range(PAGES_TO_FETCH):
+            current_page = start_page + page_offset
+
+            # Build URL with pagination and language filter
+            params: Dict[str, Any] = {
+                "page_size": PAGE_SIZE,
+                "page": current_page,
+                "language": "en",  # Filter for English voices at the API level
+            }
+
+            url = f"{VOICE_API_URL}?{urlencode(params)}"
+            request = Request(url, headers={"xi-api-key": api_key})
+
+            try:
+                with urlopen(request, timeout=15) as response:  # nosec B310
+                    payload = response.read().decode("utf-8")
+            except HTTPError as exc:
+                logger.error("ElevenLabs voices request failed: %s", exc)
+                raise
+            except URLError as exc:
+                logger.error("Unable to reach ElevenLabs API: %s", exc)
+                raise
+
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                logger.error("Failed to parse ElevenLabs response: %s", exc)
+                raise
+
+            voices = data.get("voices", [])
+            has_more = data.get("has_more", False)
+
+            logger.info("Page %d: got %d voices, has_more=%s",
+                       current_page, len(voices) if isinstance(voices, list) else 0, has_more)
+
+            if not isinstance(voices, list):
+                logger.warning("Unexpected ElevenLabs response shape: %s", type(voices))
+                break
+
+            valid_voices = [entry for entry in voices if isinstance(entry, dict)]
+            all_voices.extend(valid_voices)
+            pages_collected += 1
+
+            if not has_more:
+                logger.info("No more pages available after page %d", current_page)
+                break
+
+        logger.info("Fetched %d total voices from %d pages (started at page %d)",
+                   len(all_voices), pages_collected, start_page)
+        return all_voices
 
     def _resolve_api_key(self) -> str:
         if self._cached_key:
