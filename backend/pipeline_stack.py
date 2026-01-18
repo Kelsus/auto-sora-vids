@@ -103,7 +103,7 @@ class VideoAutomationStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
         output_bucket.add_cors_rule(
-            allowed_methods=[s3.HttpMethods.GET, s3.HttpMethods.HEAD],
+            allowed_methods=[s3.HttpMethods.GET, s3.HttpMethods.HEAD, s3.HttpMethods.PUT],
             allowed_origins=["*"],
             allowed_headers=["*"],
             exposed_headers=["ETag"],
@@ -339,6 +339,30 @@ class VideoAutomationStack(Stack):
             api_key_required=True,
         )
 
+        image_upload_urls_lambda = lambda_python.PythonFunction(
+            self,
+            "ImageUploadUrlsLambda",
+            entry=str(lambda_src),
+            index="image_upload_urls/handler.py",
+            handler="handler",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={
+                "OUTPUT_BUCKET": output_bucket.bucket_name,
+                "STAGE": stage,
+            },
+            layers=[shared_layer],
+            bundling=function_bundling,
+        )
+        output_bucket.grant_put(image_upload_urls_lambda, "jobs/*/uploads/*")
+
+        upload_urls_resource = jobs_resource.add_resource("upload-urls")
+        upload_urls_resource.add_method(
+            "POST",
+            apigateway.LambdaIntegration(image_upload_urls_lambda),
+            api_key_required=True,
+        )
 
         usage_plan = api.add_usage_plan(
             "VideoJobsUsagePlan",
@@ -830,57 +854,45 @@ class VideoAutomationStack(Stack):
         )
         state_machine.grant_start_execution(dispatcher_lambda)
 
-        gdrive_service_account_param_name = self.node.try_get_context("gdriveServiceAccountParameterName") or "/auto-sora/env/GDRIVE_SERVICE_ACCOUNT"
-        gdrive_service_account_param = ssm.StringParameter.from_secure_string_parameter_attributes(
+        # VideoPusher integration - forward completed videos directly to VideoPusher uploads
+        videopusher_table_name = self.node.try_get_context("videopusherTableName") or "VideopusherStack-UploadsTableFE9AB9DB-1L3UFLK5YBN28"
+        videopusher_table = dynamodb.Table.from_table_name(
             self,
-            "GdriveServiceAccountParameter",
-            parameter_name=gdrive_service_account_param_name,
+            "VideoPusherUploadsTable",
+            videopusher_table_name,
         )
 
-        gdrive_folder_param_name = self.node.try_get_context("gdriveFolderIdParameterName") or "/auto-sora/env/GDRIVE_FOLDER_ID"
-        gdrive_folder_param = ssm.StringParameter.from_string_parameter_attributes(
+        videopusher_bucket_name = self.node.try_get_context("videopusherBucketName") or "videopusherstack-rawbucket0c3ee094-xz5othtwb066"
+        videopusher_bucket = s3.Bucket.from_bucket_name(
             self,
-            "GdriveFolderIdParameter",
-            parameter_name=gdrive_folder_param_name,
+            "VideoPusherRawBucket",
+            videopusher_bucket_name,
         )
 
-        gdrive_lambda = lambda_python.PythonFunction(
+        videopusher_forwarder = lambda_python.PythonFunction(
             self,
-            "GoogleDriveForwarderLambda",
+            "VideoPusherForwarderLambda",
             entry=str(lambda_src),
-            index="gdrive_forwarder/handler.py",
+            index="videopusher_forwarder/handler.py",
             handler="handler",
             runtime=lambda_.Runtime.PYTHON_3_11,
-            timeout=Duration.minutes(2),
-            memory_size=512,
+            timeout=Duration.minutes(5),
+            memory_size=1024,
             environment={
-                "GDRIVE_SERVICE_ACCOUNT_PARAMETER": gdrive_service_account_param_name,
-                "GDRIVE_FOLDER_ID": gdrive_folder_param_name,
+                "VIDEOPUSHER_TABLE_NAME": videopusher_table_name,
+                "VIDEOPUSHER_BUCKET_NAME": videopusher_bucket_name,
                 "STAGE": stage,
             },
             layers=[shared_layer],
-            bundling=lambda_python.BundlingOptions(
-                image=lambda_.Runtime.PYTHON_3_11.bundling_image,
-                command=[
-                    "bash",
-                    "-c",
-                    "mkdir -p /asset-output && "
-                    "cp -r /asset-input/. /asset-output && "
-                    "pip install --no-cache-dir -r gdrive_forwarder/requirements.txt "
-                    "--target /asset-output "
-                    "--implementation cp "
-                    "--platform manylinux2014_x86_64 "
-                    "--python-version 3.11 "
-                    "--abi cp311 "
-                    "--only-binary=:all:",
-                ],
-            ),
         )
-        output_bucket.grant_read(gdrive_lambda)
-        gdrive_service_account_param.grant_read(gdrive_lambda)
-        gdrive_folder_param.grant_read(gdrive_lambda)
 
-        gdrive_lambda.add_event_source(
+        # Grant permissions for cross-stack access
+        output_bucket.grant_read(videopusher_forwarder)
+        videopusher_bucket.grant_put(videopusher_forwarder)
+        videopusher_table.grant_write_data(videopusher_forwarder)
+
+        # Trigger on completed video uploads to jobs/final/
+        videopusher_forwarder.add_event_source(
             lambda_event_sources.S3EventSource(
                 output_bucket,
                 events=[s3.EventType.OBJECT_CREATED],

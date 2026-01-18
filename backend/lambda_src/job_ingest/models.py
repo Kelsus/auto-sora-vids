@@ -80,6 +80,21 @@ class JobRequest:
                 pipeline_config_dict["drive_folder"] = drive_folder.strip()
             metadata["pipeline_config"] = pipeline_config_dict
 
+        input_image_keys = payload.get("input_image_keys") or payload.get("inputImageKeys")
+        if input_image_keys is not None:
+            if not isinstance(input_image_keys, list):
+                raise ValidationError("input_image_keys must be a list")
+            if len(input_image_keys) > 3:
+                raise ValidationError("At most 3 images may be provided")
+            for i, key in enumerate(input_image_keys):
+                if not isinstance(key, str):
+                    raise ValidationError(f"input_image_keys[{i}] must be a string")
+                if not key.startswith("jobs/"):
+                    raise ValidationError(f"input_image_keys[{i}] has invalid format")
+            if "pipeline_config" not in metadata:
+                metadata["pipeline_config"] = {}
+            metadata["pipeline_config"]["input_image_keys"] = input_image_keys
+
         article_override = cls._parse_article_override(
             payload.get("article_override") or payload.get("articleOverride")
         )

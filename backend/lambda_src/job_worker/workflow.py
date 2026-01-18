@@ -54,6 +54,13 @@ class PipelineWorkflow:
         metadata_payload = dict(metadata.metadata or {})
         if "pause_after_prompts" not in pipeline_overrides:
             pipeline_overrides["pause_after_prompts"] = True
+
+        input_image_keys = pipeline_overrides.pop("input_image_keys", None)
+        if input_image_keys:
+            local_image_paths = self._download_user_images(input_image_keys)
+            if local_image_paths:
+                pipeline_overrides["input_images"] = [str(p) for p in local_image_paths]
+
         resume_key = pipeline_overrides.get("resume_from_bundle")
         review_feedback_entry = metadata_payload.get("review_feedback") if metadata_payload else None
         review_decision = self._review_decision_from_entry(review_feedback_entry)
@@ -818,6 +825,22 @@ class PipelineWorkflow:
 
     def _local_run_dir(self, job_id: str) -> Path:
         return self._settings.data_root / job_id
+
+    def _download_user_images(self, image_keys: list[str]) -> list[Path]:
+        """Download user-uploaded images from S3 to local temp directory."""
+        images_dir = self._settings.data_root / "user_uploads"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        local_paths: list[Path] = []
+        for key in image_keys:
+            filename = Path(key).name
+            local_path = images_dir / filename
+            try:
+                self._storage.download_file(key, local_path)
+                local_paths.append(local_path)
+                logger.info("Downloaded user image %s to %s", key, local_path)
+            except Exception:
+                logger.exception("Failed to download user image %s", key)
+        return local_paths
 
     def _resolve_caption_play_res(self, overrides: Optional[Mapping[str, Any]]) -> tuple[int, int]:
         candidate: Optional[str] = None

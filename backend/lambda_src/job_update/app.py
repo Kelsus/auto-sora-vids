@@ -151,6 +151,24 @@ class JobUpdateApplication:
                 logger.exception("Failed to delete S3 artifacts for job %s", job_id)
                 return server_error("Failed to delete job artifacts")
 
+            # Clear resume_from_bundle since we deleted the artifacts it would reference
+            try:
+                self._repository.update_fields(
+                    job_id=job_id,
+                    set_parts=["#updated_at = :updated_at"],
+                    remove_parts=["#metadata.#pipeline_config.#resume_from_bundle"],
+                    attribute_names={
+                        "#metadata": "metadata",
+                        "#pipeline_config": "pipeline_config",
+                        "#resume_from_bundle": "resume_from_bundle",
+                        "#updated_at": "updated_at",
+                    },
+                    attribute_values={":updated_at": utc_now_iso()},
+                )
+                logger.info("Cleared resume_from_bundle for job %s after artifact deletion", job_id)
+            except RepositoryError:
+                logger.warning("Failed to clear resume_from_bundle for job %s (may not exist)", job_id)
+
         try:
             updated = self._store.update_job(job_id, payload)
         except JobDoesNotExist:

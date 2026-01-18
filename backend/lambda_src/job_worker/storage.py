@@ -54,3 +54,8 @@ class ArtifactStorage:
                 local_path = target_dir / relative
                 local_path.parent.mkdir(parents=True, exist_ok=True)
                 self._client.download_file(self.bucket, key, str(local_path))
+
+    def download_file(self, key: str, local_path: Path) -> None:
+        """Download a single file from S3 to local path."""
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        self._client.download_file(self.bucket, key, str(local_path))
