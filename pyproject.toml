@@ -24,7 +24,8 @@ dependencies = [
   "google-cloud-storage>=3.4",
   "google-genai>=1.0.0",
   "google-cloud-aiplatform>=1.68.0",
-  "openai>=1.0.0"
+  "openai>=1.0.0",
+  "Pillow>=10.0"
 ]
 
 [project.optional-dependencies]

@@ -61,6 +61,13 @@ class PipelineWorkflow:
             if local_image_paths:
                 pipeline_overrides["input_images"] = [str(p) for p in local_image_paths]
 
+        character_id = pipeline_overrides.get("veo_character_id")
+        characters_bucket = pipeline_overrides.get("veo_characters_bucket")
+        if character_id and characters_bucket and not pipeline_overrides.get("veo_character_images"):
+            char_paths = self._load_character_images(character_id, characters_bucket)
+            if char_paths:
+                pipeline_overrides["veo_character_images"] = [str(p) for p in char_paths]
+
         resume_key = pipeline_overrides.get("resume_from_bundle")
         review_feedback_entry = metadata_payload.get("review_feedback") if metadata_payload else None
         review_decision = self._review_decision_from_entry(review_feedback_entry)
@@ -840,6 +847,35 @@ class PipelineWorkflow:
                 logger.info("Downloaded user image %s to %s", key, local_path)
             except Exception:
                 logger.exception("Failed to download user image %s", key)
+        return local_paths
+
+    def _load_character_images(self, character_id: str, characters_bucket: str) -> list[Path]:
+        """Download character reference images from S3 based on metadata.json."""
+        import boto3
+
+        char_dir = self._settings.data_root / "characters" / character_id
+        char_dir.mkdir(parents=True, exist_ok=True)
+
+        s3 = boto3.client("s3")
+        metadata_key = f"{character_id}/metadata.json"
+        try:
+            resp = s3.get_object(Bucket=characters_bucket, Key=metadata_key)
+            metadata = json.loads(resp["Body"].read().decode("utf-8"))
+        except Exception:
+            logger.exception("Failed to load character metadata from s3://%s/%s", characters_bucket, metadata_key)
+            return []
+
+        image_names = metadata.get("referenceImages", [])
+        local_paths: list[Path] = []
+        for name in image_names:
+            image_key = f"{character_id}/{name}"
+            local_path = char_dir / name
+            try:
+                s3.download_file(characters_bucket, image_key, str(local_path))
+                local_paths.append(local_path)
+                logger.info("Downloaded character image s3://%s/%s", characters_bucket, image_key)
+            except Exception:
+                logger.exception("Failed to download character image %s", image_key)
         return local_paths
 
     def _resolve_caption_play_res(self, overrides: Optional[Mapping[str, Any]]) -> tuple[int, int]:

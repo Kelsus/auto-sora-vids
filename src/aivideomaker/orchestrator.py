@@ -180,7 +180,7 @@ class PipelineConfig(BaseModel):
     max_automatic_charts: int = 5
     chart_analysis_excerpt_chars: int = 2600
     # Veo configuration
-    veo_model: str = "veo-3.0-generate-001"
+    veo_model: str = "veo-3.1-generate-preview"
     veo_api_key_env: str = "GOOGLE_API_KEY"
     veo_aspect_ratio: str = "9:16"
     veo_poll_interval: float = 10.0
@@ -192,6 +192,10 @@ class PipelineConfig(BaseModel):
     veo_location: str = "us-central1"
     veo_credentials_path: Optional[Path] = None
     veo_credentials_parameter: Optional[str] = None
+    # Veo character (consistent character) configuration
+    veo_character_id: Optional[str] = None
+    veo_characters_bucket: Optional[str] = None
+    veo_character_images: list[Path] = Field(default_factory=list)
     # Gemini Image configuration (for chart composition)
     gemini_image_model: str = "gemini-2.0-flash-exp"
     gemini_use_vertex: bool = True
@@ -338,6 +342,14 @@ class PipelineOrchestrator:
                 submit_cooldown=config.sora_submit_cooldown,
             )
         elif provider == "veo":
+            character_images: list[bytes] | None = None
+            if config.veo_character_images:
+                character_images = [
+                    Path(p).read_bytes() for p in config.veo_character_images if Path(p).exists()
+                ]
+                if not character_images:
+                    logger.warning("veo_character_images specified but no files found")
+                    character_images = None
             media_client = VeoClient(
                 asset_dir=None,
                 api_key=os.getenv(config.veo_api_key_env),
@@ -352,6 +364,7 @@ class PipelineOrchestrator:
                 location=config.veo_location,
                 credentials_path=config.veo_credentials_path,
                 credentials_parameter=config.veo_credentials_parameter,
+                character_images=character_images,
             )
         else:
             raise ValueError(f"Unsupported media_provider '{config.media_provider}'")
@@ -1883,12 +1896,20 @@ class PipelineOrchestrator:
         except ValueError:
             return None
 
-    def _collect_existing_assets(self, bundle: PipelineBundle, sora_dir: Path) -> list[Path]:
+    def _collect_existing_assets(self, bundle: PipelineBundle, sora_dir: Path, veo_dir: Path | None = None) -> list[Path]:
         assets: list[Path] = []
         for prompt in bundle.prompts.media_prompts:
             clip_path = sora_dir / f"{prompt.chunk_id}.mp4"
+            if not clip_path.exists() and veo_dir:
+                clip_path = veo_dir / f"{prompt.chunk_id}.mp4"
             if not clip_path.exists():
-                raise RuntimeError(f"Missing clip for stitch-only mode: {clip_path}")
+                candidates = [str(sora_dir)]
+                if veo_dir:
+                    candidates.append(str(veo_dir))
+                raise RuntimeError(
+                    f"Missing clip for stitch-only mode: {prompt.chunk_id}.mp4 "
+                    f"(searched: {', '.join(candidates)})"
+                )
             assets.append(clip_path)
         return assets
 
@@ -2011,7 +2032,7 @@ class PipelineOrchestrator:
         if prompts_only:
             logger.info("🚧  Prompts-only mode: skipping media submission")
         elif stitch_only:
-            media_assets = self._collect_existing_assets(bundle, run_dirs["sora_dir"])
+            media_assets = self._collect_existing_assets(bundle, run_dirs["sora_dir"], run_dirs.get("veo_dir"))
         else:
             prepared_prompts: list[MediaPrompt] = []
 
