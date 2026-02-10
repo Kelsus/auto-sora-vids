@@ -1091,7 +1091,8 @@ class PipelineOrchestrator:
                 music_path = None
 
         logger.info("🧩  Planning Veo-sized segments")
-        chunks = self.chunk_planner.plan(script, alignment=alignment_payload)
+        one_clip_per_beat = bool(self.config.veo_character_images)
+        chunks = self.chunk_planner.plan(script, alignment=alignment_payload, one_clip_per_beat=one_clip_per_beat)
 
         logger.info("🛠️  Building structured prompts")
         prompts = self.prompt_builder.build(
@@ -2000,7 +2001,8 @@ class PipelineOrchestrator:
             )
             if should_replan:
                 logger.info("🔁  Recomputing chunk timeline from narration alignment")
-                chunks_plan = self.chunk_planner.plan(bundle.script, alignment=alignment_payload)
+                one_clip_per_beat = bool(self.config.veo_character_images)
+                chunks_plan = self.chunk_planner.plan(bundle.script, alignment=alignment_payload, one_clip_per_beat=one_clip_per_beat)
                 prompts_bundle = self.prompt_builder.build(
                     bundle.article,
                     bundle.script,
