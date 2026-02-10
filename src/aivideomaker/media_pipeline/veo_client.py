@@ -218,6 +218,9 @@ class VeoClient:
     def _safe_duration(self, prompt: MediaPrompt) -> int:
         # Veo supports 4, 6, or 8 second outputs; choose the smallest allowed duration
         # that can accommodate the requested length.
+        # reference_to_video (consistent character) only supports 8-second clips.
+        if self._reference_images:
+            return 8
         approx = max(4.0, min(8.0, float(prompt.duration_sec or 8)))
         for candidate in (4, 6, 8):
             if approx <= candidate:
