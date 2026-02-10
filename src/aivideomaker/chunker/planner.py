@@ -34,8 +34,13 @@ class ChunkPlanner:
         alignment: dict | None = None,
         one_clip_per_beat: bool = False,
     ) -> ChunkPlan:
+        logger.info("ChunkPlanner.plan called: one_clip_per_beat=%s, alignment=%s, beats=%d",
+                     one_clip_per_beat, bool(alignment), len(script.beats))
         if one_clip_per_beat:
-            return self._plan_one_per_beat(script, alignment)
+            result = self._plan_one_per_beat(script, alignment)
+            logger.info("one_clip_per_beat produced %d chunks: %s",
+                        len(result.chunks), [c.id for c in result.chunks])
+            return result
         if alignment:
             try:
                 return self._plan_with_alignment(script, alignment)

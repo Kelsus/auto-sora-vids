@@ -1090,7 +1090,7 @@ class PipelineOrchestrator:
                 logger.error("💥  Failed to generate ElevenLabs music track: %s", exc)
                 music_path = None
 
-        logger.info("🧩  Planning Veo-sized segments")
+        logger.info("🧩  Planning Veo-sized segments (veo_character_images=%s)", self.config.veo_character_images)
         one_clip_per_beat = bool(self.config.veo_character_images)
         chunks = self.chunk_planner.plan(script, alignment=alignment_payload, one_clip_per_beat=one_clip_per_beat)
 
