@@ -549,6 +549,14 @@ class VideoAutomationStack(Stack):
         )
         jobs_table.grant_read_write_data(worker_lambda)
         output_bucket.grant_read_write(worker_lambda)
+
+        # Grant read access to the Veo characters bucket (cross-stack)
+        characters_bucket_name = self.node.try_get_context("veoCharactersBucketName") or "veogeneratorstack-charactersbucketedbea08e-qmgcsrinycki"
+        characters_bucket = s3.Bucket.from_bucket_name(
+            self, "VeoCharactersBucket", characters_bucket_name
+        )
+        characters_bucket.grant_read(worker_lambda)
+
         for env_var, parameter, name in secret_parameters:
             worker_lambda.add_environment(env_var, name)
             parameter.grant_read(worker_lambda)
@@ -855,14 +863,24 @@ class VideoAutomationStack(Stack):
         state_machine.grant_start_execution(dispatcher_lambda)
 
         # VideoPusher integration - forward completed videos directly to VideoPusher uploads
-        videopusher_table_name = self.node.try_get_context("videopusherTableName") or "VideopusherStack-UploadsTableFE9AB9DB-1L3UFLK5YBN28"
+        _vp_defaults = {
+            "kelsus-prod": {
+                "table": "VideopusherStack-UploadsTableFE9AB9DB-1L3UFLK5YBN28",
+                "bucket": "videopusherstack-rawbucket0c3ee094-xz5othtwb066",
+            },
+        }
+        _vp_env = _vp_defaults.get(stage, {
+            "table": "VideopusherStack-UploadsTableFE9AB9DB-13GWRMKSNB3CK",
+            "bucket": "videopusherstack-rawbucket0c3ee094-t0atgcnbkxxi",
+        })
+        videopusher_table_name = self.node.try_get_context("videopusherTableName") or _vp_env["table"]
         videopusher_table = dynamodb.Table.from_table_name(
             self,
             "VideoPusherUploadsTable",
             videopusher_table_name,
         )
 
-        videopusher_bucket_name = self.node.try_get_context("videopusherBucketName") or "videopusherstack-rawbucket0c3ee094-xz5othtwb066"
+        videopusher_bucket_name = self.node.try_get_context("videopusherBucketName") or _vp_env["bucket"]
         videopusher_bucket = s3.Bucket.from_bucket_name(
             self,
             "VideoPusherRawBucket",

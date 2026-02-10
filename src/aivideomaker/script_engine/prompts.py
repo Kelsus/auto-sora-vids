@@ -55,7 +55,7 @@ Runtime + pacing guardrails:
     horizons, work those timeframes into the narration.
 
 {chart_brief_block}
-
+{character_block}
     Article metadata:
     - Title: {title}
     - Byline: {byline}
@@ -130,6 +130,19 @@ def _build_revision_context_block(
     return "\n" + block + "\n\n"
 
 
+CHARACTER_VISUAL_BLOCK = dedent(
+    """\
+    Presenter character (important):
+    The video features a consistent on-camera presenter. Every beat's `visual_seed` must
+    describe the presenter in the scene—not just the environment. Frame visuals as the
+    presenter speaking to camera with the relevant setting or props around them.
+    Good: "Presenter at a busy shipping port, containers stacked behind them"
+    Bad:  "Massive shipping containers stacked at a port" (no presenter mentioned)
+    Vary the presenter's framing (medium shot, over-the-shoulder, walking, gesturing)
+    while always keeping them as the focal subject of the shot."""
+)
+
+
 def render_planning_prompt(
     bundle: ArticleBundle,
     excerpt_chars: int = 1800,
@@ -139,6 +152,7 @@ def render_planning_prompt(
     *,
     style_directive: NarrativeStyleDirective | None = None,
     length_profile: VideoLengthProfile | None = None,
+    has_character: bool = False,
 ) -> str:
     article = bundle.article
     excerpt = article.text[:excerpt_chars]
@@ -150,7 +164,8 @@ def render_planning_prompt(
     approx_words = int(profile.target_runtime_sec * 2.1)
     chart_brief_block = ""
     if chart_outline:
-        chart_brief_block = "Recommended charts (use each at most once, only when the beat’s narration references the same data):\n" + indent(chart_outline, "    ") + "\n"
+        chart_brief_block = "Recommended charts (use each at most once, only when the beat's narration references the same data):\n" + indent(chart_outline, "    ") + "\n"
+    character_block = indent(CHARACTER_VISUAL_BLOCK, "    ") if has_character else ""
     return SCRIPT_PLANNING_PROMPT.format(
         title=article.metadata.title,
         byline=article.metadata.byline or "Unknown",
@@ -159,6 +174,7 @@ def render_planning_prompt(
         excerpt=excerpt,
         revision_context_block=revision_context_block,
         chart_brief_block=chart_brief_block,
+        character_block=character_block,
         style_block=style_block,
         runtime_block=runtime_block,
         target_runtime_sec=int(profile.target_runtime_sec),

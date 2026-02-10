@@ -934,6 +934,7 @@ class PipelineOrchestrator:
                 chart_outline=chart_outline,
                 style_directive=self.style_directive,
                 length_profile=self.length_profile,
+                has_character=bool(self.config.veo_character_images),
             )
 
             review_decision = None

@@ -38,6 +38,7 @@ class ScriptEngine:
         *,
         style_directive: NarrativeStyleDirective | None = None,
         length_profile: VideoLengthProfile | None = None,
+        has_character: bool = False,
     ) -> ScriptPlan:
         directive = style_directive or get_style_directive(None)
         profile = length_profile or get_length_profile(None)
@@ -48,6 +49,7 @@ class ScriptEngine:
             chart_outline=chart_outline,
             style_directive=directive,
             length_profile=profile,
+            has_character=has_character,
         )
         raw = self.llm.complete(prompt)
         logger.debug("LLM raw response: %s", raw)

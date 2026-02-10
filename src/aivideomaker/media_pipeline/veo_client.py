@@ -51,10 +51,9 @@ class VeoClient:
     """Client for Google's Veo 3 video generation API via the Gemini SDK."""
 
     CHARACTER_PROMPT_TEMPLATE = (
-        "The person from the reference image {visual_prompt}.\n"
-        "Medium shot, eye-level camera, professional studio lighting.\n"
-        "The person speaks naturally to camera with subtle head movements.\n"
-        "Maintain the exact same face, appearance, and outfit as the reference image."
+        "{visual_prompt}\n"
+        "Use the exact person from the reference image as the presenter.\n"
+        "Maintain the same face, appearance, and outfit as the reference image throughout."
     )
 
     MAX_REFERENCE_IMAGES = 3
