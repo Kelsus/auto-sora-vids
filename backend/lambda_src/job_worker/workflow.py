@@ -61,13 +61,6 @@ class PipelineWorkflow:
             if local_image_paths:
                 pipeline_overrides["input_images"] = [str(p) for p in local_image_paths]
 
-        character_id = pipeline_overrides.get("veo_character_id")
-        characters_bucket = pipeline_overrides.get("veo_characters_bucket")
-        if character_id and characters_bucket and not pipeline_overrides.get("veo_character_images"):
-            char_paths = self._load_character_images(character_id, characters_bucket)
-            if char_paths:
-                pipeline_overrides["veo_character_images"] = [str(p) for p in char_paths]
-
         resume_key = pipeline_overrides.get("resume_from_bundle")
         review_feedback_entry = metadata_payload.get("review_feedback") if metadata_payload else None
         review_decision = self._review_decision_from_entry(review_feedback_entry)
@@ -952,10 +945,20 @@ class PipelineWorkflow:
         run_dir.mkdir(parents=True, exist_ok=True)
         self._storage.download_prefix(prefix, run_dir)
 
+    def _ensure_character_images(self, overrides: Dict[str, Any]) -> None:
+        """Download character images from S3 if configured but not yet resolved."""
+        character_id = overrides.get("veo_character_id")
+        characters_bucket = overrides.get("veo_characters_bucket")
+        if character_id and characters_bucket and not overrides.get("veo_character_images"):
+            char_paths = self._load_character_images(character_id, characters_bucket)
+            if char_paths:
+                overrides["veo_character_images"] = [str(p) for p in char_paths]
+
     def _get_runner(self, overrides: Optional[Dict[str, Any]]) -> PipelineRunner:
         if self._injected_runner is not None:
             return self._injected_runner
         payload = overrides or {}
+        self._ensure_character_images(payload)
         signature = json.dumps(payload, sort_keys=True)
         runner = self._runner_cache.get(signature)
         if runner is None:
