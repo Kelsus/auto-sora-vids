@@ -52,8 +52,7 @@ class VeoClient:
 
     CHARACTER_PROMPT_TEMPLATE = (
         "{visual_prompt}\n"
-        "Use the exact person from the reference image as the presenter.\n"
-        "Maintain the same face, appearance, and outfit as the reference image throughout."
+        "Use the exact character from the reference image as the presenter."
     )
 
     MAX_REFERENCE_IMAGES = 3
@@ -209,7 +208,7 @@ class VeoClient:
             results.append(
                 {
                     "image": {"image_bytes": b64, "mime_type": "image/jpeg"},
-                    "reference_type": "ASSET",
+                    "reference_type": "asset",
                 }
             )
         logger.info("Prepared %d character reference image(s) for Veo", len(results))
@@ -231,6 +230,10 @@ class VeoClient:
         if self._reference_images:
             visual = self.CHARACTER_PROMPT_TEMPLATE.format(visual_prompt=prompt.visual_prompt)
             segments = [visual]
+            if self.character_prompt_prefix:
+                segments.append(f"Presenter voice: {self.character_prompt_prefix}")
+            if prompt.transcript and prompt.transcript.strip():
+                segments.append(f'The presenter says: "{prompt.transcript.strip()}"')
         else:
             segments = [prompt.visual_prompt]
         segments.append(f"Audio direction: {prompt.audio_prompt}.")
@@ -249,6 +252,7 @@ class VeoClient:
             duration_seconds=duration,
             aspect_ratio=self.aspect_ratio,
             negative_prompt=prompt.negative_prompt,
+            person_generation="allow_adult",
         )
         if self._supports_seed:
             config_kwargs["seed"] = self.seed
@@ -257,9 +261,11 @@ class VeoClient:
             config_kwargs["reference_images"] = self._reference_images
             logger.info("Including %d reference image(s) for chunk %s", len(self._reference_images), prompt.chunk_id)
         config = types.GenerateVideosConfig(**config_kwargs)
+        composed_prompt = self._compose_prompt(prompt)
+        logger.info("Veo prompt for chunk %s:\n%s", prompt.chunk_id, composed_prompt)
         return self.client.models.generate_videos(
             model=self.model,
-            prompt=self._compose_prompt(prompt),
+            prompt=composed_prompt,
             config=config,
         )
 

@@ -75,10 +75,12 @@ class MediaPromptBuilder:
         default_voice: str | None = None,
         negative_prompt: str | None = None,
         visual_style: Optional[dict] = None,
+        has_character: bool = False,
     ) -> None:
         self.default_voice = default_voice
         self.configured_negative_prompt = negative_prompt
         self.visual_style = visual_style or {}
+        self.has_character = has_character
         self.base_negations: list[str] = list(self.visual_style.get("bans", []))
         self.motion_defaults: list[str] = list(self.visual_style.get("motion", []))
         self.lens_hint: str | None = self.visual_style.get("lens")
@@ -156,14 +158,17 @@ class MediaPromptBuilder:
 
     def _visual_prompt(self, article: ArticleBundle, beat: Beat, duration: float) -> str:
         parts: list[str] = []
-        title = article.article.metadata.title
-        if title:
-            parts.append(f"Documentary-style coverage about {title}.")
+        if self.has_character:
+            if beat.visual_seed:
+                parts.append(beat.visual_seed.strip() + ".")
         else:
-            parts.append("Documentary-style news coverage.")
-
-        if beat.visual_seed:
-            parts.append(f"Focus on {beat.visual_seed.strip()}.")
+            title = article.article.metadata.title
+            if title:
+                parts.append(f"Documentary-style coverage about {title}.")
+            else:
+                parts.append("Documentary-style news coverage.")
+            if beat.visual_seed:
+                parts.append(f"Focus on {beat.visual_seed.strip()}.")
 
         if beat.intent:
             parts.append(f"Mood/intent: {beat.intent}.")
@@ -172,17 +177,18 @@ class MediaPromptBuilder:
         qc: BeatQCRules | None = beat.qc
 
         preset_lines: list[str] = []
-        preset = self._select_preset(beat)
-        if preset:
-            preset_lines.append(
-                preset.template.format(
-                    subject_context=self._subject_context(article),
-                    focus_phrase=self._focus_phrase(beat),
+        if not self.has_character:
+            preset = self._select_preset(beat)
+            if preset:
+                preset_lines.append(
+                    preset.template.format(
+                        subject_context=self._subject_context(article),
+                        focus_phrase=self._focus_phrase(beat),
+                    )
                 )
-            )
 
         shot_instructions: list[str] = []
-        if visual_spec:
+        if visual_spec and not self.has_character:
             shot_instructions.extend(self._visual_type_instructions(visual_spec))
         shot_instructions.append("Vertical 9:16 frame, cinematic realism.")
         shot_instructions.extend(self._common_sense_motion_instructions(beat))

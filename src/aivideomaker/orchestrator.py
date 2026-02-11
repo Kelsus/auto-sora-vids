@@ -196,6 +196,7 @@ class PipelineConfig(BaseModel):
     veo_character_id: Optional[str] = None
     veo_characters_bucket: Optional[str] = None
     veo_character_images: list[Path] = Field(default_factory=list)
+    veo_voice_description: Optional[str] = None
     # Gemini Image configuration (for chart composition)
     gemini_image_model: str = "gemini-2.0-flash-exp"
     gemini_use_vertex: bool = True
@@ -365,6 +366,7 @@ class PipelineOrchestrator:
                 credentials_path=config.veo_credentials_path,
                 credentials_parameter=config.veo_credentials_parameter,
                 character_images=character_images,
+                character_prompt_prefix=config.veo_voice_description,
             )
         else:
             raise ValueError(f"Unsupported media_provider '{config.media_provider}'")
@@ -480,6 +482,7 @@ class PipelineOrchestrator:
                 default_voice=config.voice_id,
                 negative_prompt=config.negative_prompt,
                 visual_style=visual_style_dict,
+                has_character=bool(config.veo_character_images),
             ),
             media_client=media_client,
             voice_manager=VoiceSessionManager(
@@ -1042,11 +1045,13 @@ class PipelineOrchestrator:
         alignment_payload: dict | None = None
 
         script_text = script.full_transcript
+        has_character = bool(self.config.veo_character_images)
         should_prepare_voice = (
             self.voice_manager.eleven_client
             and script_text.strip()
             and not dry_run
             and (not prompts_only or self.config.prepare_voice_during_prompts)
+            and not has_character
         )
 
         if should_prepare_voice:
@@ -1060,6 +1065,13 @@ class PipelineOrchestrator:
                 alignment_payload = narration_asset.alignment_payload
             except Exception as exc:  # pragma: no cover - defensive safeguard around TTS
                 logger.error("💥  Failed to prepare narration during planning: %s", exc)
+        elif has_character and script_text.strip():
+            # Character mode skips TTS but still needs a transcript file for the dashboard.
+            transcript_dir = self.voice_manager.base_dir / "default"
+            transcript_dir.mkdir(parents=True, exist_ok=True)
+            transcript_path = transcript_dir / "transcript.txt"
+            transcript_path.write_text(script_text, encoding="utf-8")
+            narration_asset = NarrationAsset(transcript_path=transcript_path)
 
         allow_music_generation = script_greenlit and not prompts_only
 
@@ -1975,7 +1987,7 @@ class PipelineOrchestrator:
                 alignment_path=alignment_path,
                 alignment_payload=bundle.narration_alignment_payload,
             )
-        elif not prompts_only:
+        elif not prompts_only and not bool(self.config.veo_character_images):
             logger.info("🎙️  Preparing narration audio")
             script_text = bundle.script.full_transcript
             voice_id = self.config.narration_voice_id or self.config.voice_id
@@ -2149,7 +2161,8 @@ class PipelineOrchestrator:
             and media_assets
         )
         if should_stitch:
-            voice_track = narration_asset.audio_path if narration_asset else None
+            is_character_mode = bool(self.config.veo_character_images)
+            voice_track = None if is_character_mode else (narration_asset.audio_path if narration_asset else None)
             # When stitch_only, don't burn captions - let the separate caption generation step handle it
             # This avoids needing system ffmpeg in Docker (uses imageio-ffmpeg bundled binary instead)
             stitch_captions_ass = None if stitch_only else captions_ass_path
@@ -2160,6 +2173,7 @@ class PipelineOrchestrator:
                 captions=caption_segments,
                 captions_ass=stitch_captions_ass,
                 output_basename=bundle.article.slug,
+                keep_video_audio=is_character_mode,
             )
         else:
             reason = "prompts-only mode" if prompts_only else "dry run or no assets"

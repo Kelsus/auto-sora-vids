@@ -56,6 +56,7 @@ class Stitcher:
         music_volume: float = 0.12,
         level_audio: bool = True,
         output_basename: str = "final_video",
+        keep_video_audio: bool = False,
     ) -> Path:
         self.export_dir.mkdir(parents=True, exist_ok=True)
         clips = [VideoFileClip(str(path)) for path in video_paths]
@@ -100,7 +101,10 @@ class Stitcher:
         target_duration = video_duration
         duration_tolerance = 0.05
 
-        if voice_track:
+        if keep_video_audio and final.audio is not None:
+            audio_clips.append(final.audio)
+
+        if voice_track and not keep_video_audio:
             voice_clip = AudioFileClip(str(voice_track)).volumex(voice_volume)
             voice_duration = voice_clip.duration
             audio_clips.append(voice_clip)
@@ -108,7 +112,8 @@ class Stitcher:
             target_duration = voice_duration
 
         if music_track:
-            music_clip = AudioFileClip(str(music_track)).volumex(music_volume)
+            effective_music_volume = music_volume * 0.5 if keep_video_audio else music_volume
+            music_clip = AudioFileClip(str(music_track)).volumex(effective_music_volume)
             loop_target = target_duration
             music_clip = afx.audio_loop(music_clip, duration=loop_target)
             audio_clips.append(music_clip)
@@ -119,21 +124,22 @@ class Stitcher:
         else:
             composite = None
 
-        # Synchronize video duration with narration
-        if target_duration > video_duration + duration_tolerance:
-            logger.info(
-                "Extending final video from %.2fs to %.2fs to align with narration",
-                video_duration,
-                target_duration,
-            )
-            final = final.set_duration(target_duration)
-        elif video_duration > target_duration + duration_tolerance:
-            logger.info(
-                "Trimming final video from %.2fs to %.2fs to align with narration",
-                video_duration,
-                target_duration,
-            )
-            final = final.subclip(0, target_duration)
+        # Synchronize video duration with narration (skip when keeping video audio)
+        if not keep_video_audio:
+            if target_duration > video_duration + duration_tolerance:
+                logger.info(
+                    "Extending final video from %.2fs to %.2fs to align with narration",
+                    video_duration,
+                    target_duration,
+                )
+                final = final.set_duration(target_duration)
+            elif video_duration > target_duration + duration_tolerance:
+                logger.info(
+                    "Trimming final video from %.2fs to %.2fs to align with narration",
+                    video_duration,
+                    target_duration,
+                )
+                final = final.subclip(0, target_duration)
 
         if level_audio:
             logger.info("Audio leveling placeholder; integrate ffmpeg filters here")

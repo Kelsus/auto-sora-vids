@@ -133,13 +133,19 @@ def _build_revision_context_block(
 CHARACTER_VISUAL_BLOCK = dedent(
     """\
     Presenter character (important):
-    The video features a consistent on-camera presenter. Every beat's `visual_seed` must
-    describe the presenter in the scene—not just the environment. Frame visuals as the
-    presenter speaking to camera with the relevant setting or props around them.
-    Good: "Presenter at a busy shipping port, containers stacked behind them"
+    The video features a consistent on-camera presenter who speaks each beat's transcript
+    as dialogue. Every beat's `visual_seed` must describe the presenter actively
+    illustrating or reacting to what they are saying—not just standing in a generic
+    setting. The visual should make sense even on mute: a viewer should roughly understand
+    the beat's topic from the presenter's actions, props, and environment alone.
+    Good: "Presenter speaking to camera while holding up a tablet, shaking their head in disbelief, standing in a bright open-plan office with large windows and natural sunlight"
+    Good: "Presenter walking energetically through a busy sunlit warehouse, pointing at shelves while workers move boxes behind them, animated gestures"
+    Good: "Close-up of presenter outdoors on a rooftop with a city skyline behind them, leaning in to camera with an excited expression, golden hour light"
+    Bad:  "Presenter in medium shot against a sleek tech lab backdrop" (generic, static, doesn't reflect transcript)
+    Bad:  "Presenter standing in a dimly lit server room" (dark, static, boring)
     Bad:  "Massive shipping containers stacked at a port" (no presenter mentioned)
-    Vary the presenter's framing (medium shot, over-the-shoulder, walking, gesturing)
-    while always keeping them as the focal subject of the shot."""
+    Vary the presenter's framing (medium shot, close-up, walking, gesturing, interacting
+    with objects) while always keeping them as the focal subject of the shot."""
 )
 
 
