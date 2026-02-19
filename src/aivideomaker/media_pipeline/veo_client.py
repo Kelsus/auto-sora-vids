@@ -50,10 +50,7 @@ class VeoJobError(RuntimeError):
 class VeoClient:
     """Client for Google's Veo 3 video generation API via the Gemini SDK."""
 
-    CHARACTER_PROMPT_TEMPLATE = (
-        "{visual_prompt}\n"
-        "Use the exact character from the reference image as the presenter."
-    )
+    CHARACTER_PROMPT_TEMPLATE = "{visual_prompt}"
 
     MAX_REFERENCE_IMAGES = 3
 
@@ -61,7 +58,7 @@ class VeoClient:
         self,
         asset_dir: Path | None = None,
         api_key: str | None = None,
-        model: str = "veo-3.1-generate-preview",
+        model: str = "veo-3.1-fast-generate-001",
         aspect_ratio: str = "16:9",
         poll_interval: float = 10.0,
         max_wait: float = 600.0,
@@ -231,14 +228,14 @@ class VeoClient:
             visual = self.CHARACTER_PROMPT_TEMPLATE.format(visual_prompt=prompt.visual_prompt)
             segments = [visual]
             if self.character_prompt_prefix:
-                segments.append(f"Presenter voice: {self.character_prompt_prefix}")
+                segments.append(f"Voice style: {self.character_prompt_prefix}")
             if prompt.transcript and prompt.transcript.strip():
-                segments.append(f'The presenter says: "{prompt.transcript.strip()}"')
+                segments.append(f"Scene dialogue: {prompt.transcript.strip()}")
         else:
             segments = [prompt.visual_prompt]
         segments.append(f"Audio direction: {prompt.audio_prompt}.")
-        if prompt.negative_prompt:
-            segments.append(f"Avoid: {prompt.negative_prompt}.")
+        # Negative prompt is passed separately via GenerateVideosConfig.negative_prompt;
+        # embedding it in the main prompt text can confuse safety filters.
         return "\n".join(segment for segment in segments if segment)
 
     def _create_job(self, prompt: MediaPrompt) -> types.GenerateVideosOperation:
@@ -262,7 +259,11 @@ class VeoClient:
             logger.info("Including %d reference image(s) for chunk %s", len(self._reference_images), prompt.chunk_id)
         config = types.GenerateVideosConfig(**config_kwargs)
         composed_prompt = self._compose_prompt(prompt)
-        logger.info("Veo prompt for chunk %s:\n%s", prompt.chunk_id, composed_prompt)
+        logger.info("[%s] visual_prompt   : %s", prompt.chunk_id, prompt.visual_prompt)
+        logger.info("[%s] transcript      : %s", prompt.chunk_id, prompt.transcript)
+        logger.info("[%s] audio_prompt    : %s", prompt.chunk_id, prompt.audio_prompt)
+        logger.info("[%s] negative_prompt : %s", prompt.chunk_id, prompt.negative_prompt or "(none)")
+        logger.info("[%s] composed_prompt : %s", prompt.chunk_id, composed_prompt)
         return self.client.models.generate_videos(
             model=self.model,
             prompt=composed_prompt,

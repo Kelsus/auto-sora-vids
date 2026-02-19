@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, Optional
 
 from job_worker.models import ClipTask, JobContext, JobMetadata
 from job_worker.workflow import PipelineWorkflow
+
+# Ensure INFO-level logs from the aivideomaker package reach CloudWatch.
+# The Lambda root logger defaults to WARNING, which silently drops INFO calls.
+logging.getLogger("aivideomaker").setLevel(logging.INFO)
 
 
 def handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:  # pragma: no cover

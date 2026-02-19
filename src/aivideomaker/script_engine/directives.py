@@ -91,13 +91,13 @@ NARRATIVE_STYLE_DIRECTIVES: dict[str, NarrativeStyleDirective] = {
         style_id="docu_reveal",
         display_name="Docu-Reveal",
         framing=(
-            "Play investigative storyteller: foreground the tension, drip withheld context, and land on the article's "
-            "primary revelation without inventing drama."
+            "Play investigative storyteller: foreground the stakes, drip withheld context, and land on the article's "
+            "primary revelation without inventing unnecessary drama."
         ),
         tone_rules=(
             "Open with urgency; if the article allows it, hint that something you expected to be true is not.",
             "Use confident, reporterly narration with light skepticism and specific sourcing cues.",
-            "Let suspense rise beat by beat until the final reveal resolves the tension.",
+            "Let curiosity build beat by beat until the final reveal resolves the central question.",
             "Before drafting, articulate the article's central thesis in one sentence and list the top three fresh facts,",
             "quotes, or data points that prove it (including any specific numbers, time horizons, or stakeholder stances).",
             "Track these anchor insights through the outline so the finished script never loses the core argument.",
@@ -106,13 +106,13 @@ NARRATIVE_STYLE_DIRECTIVES: dict[str, NarrativeStyleDirective] = {
             "a well-known premise as the twist. Anchor the beats in clear timeline cues so viewers grasp why the story",
             "matters right now and how it relates to other events in the article. When you fill",
             "`withheld_context` and `final_reveal`, spotlight the new evidence the article surfaces, not the punchline.",
-            "Never invent conflict: ground the controversy in the article's documented tension. Ensure the",
-            "`controversy_summary` contrasts the clashing priorities accurately. The `final_reveal` must restate the",
+            "Never invent disputes: ground the debate in the article's documented positions. Ensure the",
+            "`controversy_summary` contrasts the differing priorities accurately. The `final_reveal` must restate the",
             "article's primary takeaway in plain language, supported by at least one of the fresh facts you identified.",
         ),
         structure_rules=(
-            "Beat 1 is the hook with a provocative question or unexpected stake.",
-            "Middle beats peel back evidence (data, quotes, timelines) that explain the controversy.",
+            "Beat 1 is the hook with a pointed question or unexpected stake.",
+            "Middle beats peel back evidence (data, quotes, timelines) that explain the debate.",
             "Penultimate beat surfaces the withheld context; final beat states the takeaway and what it means next.",
         ),
         finishing_notes=(
@@ -159,7 +159,7 @@ NARRATIVE_STYLE_DIRECTIVES: dict[str, NarrativeStyleDirective] = {
             "Close with a synthesis beat that ties the list back to the thesis or previews what happens next.",
         ),
         finishing_notes=(
-            "Reference the original ordering if the article provides one; otherwise choose an order that escalates drama.",
+            "Reference the original ordering if the article provides one; otherwise choose an order that builds momentum.",
             "Make sure every promised list item actually appears in the beats.",
         ),
     ),

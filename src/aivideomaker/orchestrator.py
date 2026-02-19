@@ -197,6 +197,7 @@ class PipelineConfig(BaseModel):
     veo_characters_bucket: Optional[str] = None
     veo_character_images: list[Path] = Field(default_factory=list)
     veo_voice_description: Optional[str] = None
+    veo_presenter_description: Optional[str] = None
     # Gemini Image configuration (for chart composition)
     gemini_image_model: str = "gemini-2.0-flash-exp"
     gemini_use_vertex: bool = True
@@ -938,6 +939,7 @@ class PipelineOrchestrator:
                 style_directive=self.style_directive,
                 length_profile=self.length_profile,
                 has_character=bool(self.config.veo_character_images),
+                presenter_description=self.config.veo_presenter_description,
             )
 
             review_decision = None

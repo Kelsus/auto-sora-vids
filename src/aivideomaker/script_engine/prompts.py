@@ -31,8 +31,8 @@ SCRIPT_PLANNING_PROMPT = dedent(
     - Do not use lines like: "And here's the crux", "But here's what they're not telling you", "Here's the thing",
       "Here's the problem", "Here's the catch", "You won't believe", "What happens next", "This changes everything",
       "Let that sink in", "Spoiler alert".
-    - Prefer short, concrete sentences. Use specific nouns/verbs over hype. No vague "shocking", "wild", "insane" unless the article uses them.
-    - If you add suspense, do it with verified facts and pacing—not insinuation.
+    - Prefer short, concrete sentences. Use specific nouns/verbs over hype. Avoid sensationalist or hyperbolic adjectives.
+    - If you build intrigue, do it with verified facts and pacing—not insinuation.
 
     When you cite a fact or metric, lightly attribute its origin—reference the publication, dataset, research team,
     or institution in natural language (e.g., "According to Supply Chain Dive" or "Researchers at MIT found...").
@@ -48,14 +48,29 @@ Runtime + pacing guardrails:
 {runtime_block}
 
     Use escalating beats that move from surface signals into the diagnostic evidence. Sprinkle in concrete
-    data points (inventories, freight indices, hiring stats, expected payback windows, etc.) that support the tension.
-    Every beat should either (a) surface a new fact that advances the thesis or (b) interrogate why stakeholders
+    data points (inventories, freight indices, hiring stats, expected payback windows, etc.) that support the narrative arc.
+    Every beat should either (a) surface a new fact that advances the thesis or (b) examine why stakeholders
     are reacting the way they are. Preserve the article's nuance: highlight both the seeming strength and the
-    warning signs the reporting surfaces. If the piece spotlights investments that will pay off over specific
+    counterpoints the reporting surfaces. If the piece spotlights investments that will pay off over specific
     horizons, work those timeframes into the narration.
 
 {chart_brief_block}
 {character_block}
+    Video-model content filters (critical):
+    The `visual_seed`, `transcript`, and `audio_mood` fields are sent directly to a video
+    generation model with strict word-level content filters. These filters flag individual
+    words regardless of context, so even harmless phrases can be rejected if they contain
+    a flagged word. Rules for these three fields:
+    - Use only neutral, descriptive language. Avoid words associated with violence, weapons,
+      conflict, crime, or inflammatory topics—even in metaphorical or business use.
+    - Common replacements: "competition" not "battle/war/fight", "challenge" not "threat",
+      "debate" not "controversy/conflict", "decline" not "collapse/crash", "surge" not
+      "explosion", "setback" not "blow", "dismiss" not "fire" (personnel context),
+      "disruption" not "destruction", "pressure" not "assault", "standoff" not "confrontation".
+    - For `audio_mood`: use neutral musical terms (e.g., "contemplative underscore",
+      "upbeat corporate score", "steady rhythmic pulse", "reflective piano") rather than
+      dramatic terms (avoid "ominous", "menacing", "aggressive", "dark", "threatening").
+
     Article metadata:
     - Title: {title}
     - Byline: {byline}
@@ -145,7 +160,25 @@ CHARACTER_VISUAL_BLOCK = dedent(
     Bad:  "Presenter standing in a dimly lit server room" (dark, static, boring)
     Bad:  "Massive shipping containers stacked at a port" (no presenter mentioned)
     Vary the presenter's framing (medium shot, close-up, walking, gesturing, interacting
-    with objects) while always keeping them as the focal subject of the shot."""
+    with objects) while always keeping them as the focal subject of the shot.
+
+    Beat length (critical):
+    Each beat becomes a single 8-second video clip. The generated character speaks slower
+    than a real narrator—keep each beat's transcript to a maximum of 15 words (~2 short
+    sentences). Longer transcripts will be cut off or produce garbled audio at the end.
+    Distribute the story's content evenly across beats rather than front-loading one beat
+    with too much information.
+
+    No real names (critical):
+    The transcript and visual_seed are sent directly to the video generation model, which
+    rejects prompts that mention real people by name. NEVER use real person names anywhere
+    in the transcript or visual_seed. Instead, refer to people by their role, title, or
+    affiliation. This applies to executives, politicians, researchers, celebrities, and
+    any other named individuals. Product and company names are fine.
+    Good: "The company's co-CEO called this 'just the beginning.'"
+    Bad:  "Gustav Söderström called this 'just the beginning.'"
+    Good: "According to the lead researcher, the results were surprising."
+    Bad:  "According to John Smith, the results were surprising.\""""
 )
 
 
@@ -159,6 +192,7 @@ def render_planning_prompt(
     style_directive: NarrativeStyleDirective | None = None,
     length_profile: VideoLengthProfile | None = None,
     has_character: bool = False,
+    presenter_description: str | None = None,
 ) -> str:
     article = bundle.article
     excerpt = article.text[:excerpt_chars]
@@ -167,11 +201,18 @@ def render_planning_prompt(
     profile = length_profile or get_length_profile(None)
     style_block = indent(directive.prompt_block(), "    ")
     runtime_block = indent(profile.runtime_block(), "    ")
-    approx_words = int(profile.target_runtime_sec * 2.1)
+    # Character mode uses Veo-generated speech which is slower than TTS narration.
+    approx_words = int(profile.target_beat_count * 15) if has_character else int(profile.target_runtime_sec * 2.1)
     chart_brief_block = ""
     if chart_outline:
         chart_brief_block = "Recommended charts (use each at most once, only when the beat's narration references the same data):\n" + indent(chart_outline, "    ") + "\n"
-    character_block = indent(CHARACTER_VISUAL_BLOCK, "    ") if has_character else ""
+    if has_character:
+        char_block = CHARACTER_VISUAL_BLOCK
+        if presenter_description:
+            char_block = f"Presenter identity: {presenter_description}\n" + char_block
+        character_block = indent(char_block, "    ")
+    else:
+        character_block = ""
     return SCRIPT_PLANNING_PROMPT.format(
         title=article.metadata.title,
         byline=article.metadata.byline or "Unknown",
@@ -196,7 +237,7 @@ REVIEW_PROMPT_TEMPLATE = dedent(
     You are the editorial gut-check ensuring the script plan still reflects the article's reporting.
     Given the original article and the proposed script plan, verify that the story the script tells
     matches the article's substance and key takeaways. Prioritize fidelity to the source over
-    stylistic polish or suspense mechanics.
+    stylistic polish or narrative pacing.
 
     Article metadata:
     - Title: {title}
@@ -221,7 +262,7 @@ REVIEW_PROMPT_TEMPLATE = dedent(
 
     Rules:
     - If the script introduces factual errors, contradicts the article, or omits the core takeaway, set "verdict" to "revise".
-    - Approve when the script captures the article's main storyline, key facts, and nuance—even if pacing or suspense could improve.
+    - Approve when the script captures the article's main storyline, key facts, and nuance—even if pacing or narrative structure could improve.
     - Use "concerns" for each specific misalignment with the article. Mention beat ids when possible.
     - Use "action_items" to give concrete guidance to fix the factual or contextual gaps that block approval.
     - Keep the JSON concise; do not include explanatory prose outside the JSON object.
