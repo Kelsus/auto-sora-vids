@@ -212,7 +212,10 @@ class VideoAutomationStack(Stack):
         jobs_resource.add_method("POST", jobs_integration, api_key_required=True)
 
         api_key_value = self.node.try_get_context("jobsApiKey")
-        api_key_id = self.node.try_get_context("jobsApiKeyId")
+        api_key_id = (
+            self.node.try_get_context(f"{stage}:jobsApiKeyId")
+            or self.node.try_get_context("jobsApiKeyId")
+        )
 
         if api_key_id:
             api_key = apigateway.ApiKey.from_api_key_id(
@@ -550,12 +553,15 @@ class VideoAutomationStack(Stack):
         jobs_table.grant_read_write_data(worker_lambda)
         output_bucket.grant_read_write(worker_lambda)
 
-        # Grant read access to the Veo characters bucket (cross-stack)
-        characters_bucket_name = self.node.try_get_context("veoCharactersBucketName") or "veogeneratorstack-charactersbucketedbea08e-qmgcsrinycki"
-        characters_bucket = s3.Bucket.from_bucket_name(
-            self, "VeoCharactersBucket", characters_bucket_name
+        characters_bucket = s3.Bucket(
+            self,
+            "VeoCharactersBucket",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            removal_policy=RemovalPolicy.RETAIN,
         )
         characters_bucket.grant_read(worker_lambda)
+        worker_lambda.add_environment("VEO_CHARACTERS_BUCKET", characters_bucket.bucket_name)
 
         for env_var, parameter, name in secret_parameters:
             worker_lambda.add_environment(env_var, name)
@@ -889,7 +895,7 @@ class VideoAutomationStack(Stack):
 
         # VideoPusher integration - forward completed videos directly to VideoPusher uploads
         _vp_defaults = {
-            "kelsus-prod": {
+            "prod": {
                 "table": "VideopusherStack-UploadsTableFE9AB9DB-1L3UFLK5YBN28",
                 "bucket": "videopusherstack-rawbucket0c3ee094-xz5othtwb066",
             },
@@ -948,4 +954,11 @@ class VideoAutomationStack(Stack):
             "VideoJobsApiKeyOutput",
             value=api_key_value,
             description="API key value required by the video jobs ingest endpoint",
+        )
+
+        CfnOutput(
+            self,
+            "VeoCharactersBucketOutput",
+            value=characters_bucket.bucket_name,
+            description="S3 bucket for Veo character reference images and metadata",
         )

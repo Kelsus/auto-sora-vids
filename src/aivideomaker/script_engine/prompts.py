@@ -162,12 +162,11 @@ CHARACTER_VISUAL_BLOCK = dedent(
     Vary the presenter's framing (medium shot, close-up, walking, gesturing, interacting
     with objects) while always keeping them as the focal subject of the shot.
 
-    Beat length (critical):
-    Each beat becomes a single 8-second video clip. The generated character speaks slower
-    than a real narrator—keep each beat's transcript to a maximum of 15 words (~2 short
-    sentences). Longer transcripts will be cut off or produce garbled audio at the end.
-    Distribute the story's content evenly across beats rather than front-loading one beat
-    with too much information.
+    Beat length (hard limit — count every word):
+    Each beat is exactly 8 seconds of video. The AI voice speaks at ~1.5 words/second,
+    so the absolute maximum is 12 words per beat transcript. Count the words before
+    writing. Beats with 13+ words WILL be cut off mid-sentence. If a thought needs more
+    room, split it across two beats. Distribute the story evenly; never front-load one beat.
 
     No real names (critical):
     The transcript and visual_seed are sent directly to the video generation model, which
@@ -202,7 +201,7 @@ def render_planning_prompt(
     style_block = indent(directive.prompt_block(), "    ")
     runtime_block = indent(profile.runtime_block(), "    ")
     # Character mode uses Veo-generated speech which is slower than TTS narration.
-    approx_words = int(profile.target_beat_count * 15) if has_character else int(profile.target_runtime_sec * 2.1)
+    approx_words = int(profile.target_beat_count * 12) if has_character else int(profile.target_runtime_sec * 2.1)
     chart_brief_block = ""
     if chart_outline:
         chart_brief_block = "Recommended charts (use each at most once, only when the beat's narration references the same data):\n" + indent(chart_outline, "    ") + "\n"
