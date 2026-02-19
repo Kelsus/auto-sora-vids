@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 import logging
 import random
@@ -24,6 +26,11 @@ try:
 except ImportError:  # pragma: no cover - optional dependency for Vertex downloads
     storage = None  # type: ignore[assignment]
 
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover - optional for character image processing
+    Image = None  # type: ignore[assignment]
+
 try:  # pragma: no cover - optional dependency for SSM lookups
     import boto3
     from botocore.exceptions import BotoCoreError, ClientError
@@ -43,11 +50,15 @@ class VeoJobError(RuntimeError):
 class VeoClient:
     """Client for Google's Veo 3 video generation API via the Gemini SDK."""
 
+    CHARACTER_PROMPT_TEMPLATE = "{visual_prompt}"
+
+    MAX_REFERENCE_IMAGES = 3
+
     def __init__(
         self,
         asset_dir: Path | None = None,
         api_key: str | None = None,
-        model: str = "veo-3.0-generate-001",
+        model: str = "veo-3.1-fast-generate-001",
         aspect_ratio: str = "16:9",
         poll_interval: float = 10.0,
         max_wait: float = 600.0,
@@ -58,6 +69,9 @@ class VeoClient:
         project: str | None = None,
         location: str | None = None,
         credentials_path: Path | None = None,
+        credentials_parameter: str | None = None,
+        character_images: list[bytes] | None = None,
+        character_prompt_prefix: str | None = None,
     ) -> None:
         self._asset_dir = Path(asset_dir) if asset_dir is not None else None
         self.api_key = api_key
@@ -73,8 +87,13 @@ class VeoClient:
         self.project = project
         self.location = location or "us-central1"
         self.credentials_path = Path(credentials_path) if credentials_path else None
-        self.credentials_parameter = "/auto-sora/veo-service-account"
+        self.credentials_parameter = credentials_parameter or "/auto-sora/veo-service-account"
         self._credentials = None
+        self.character_images = character_images
+        self.character_prompt_prefix = character_prompt_prefix
+        self._reference_images: list[dict[str, Any]] | None = None
+        if self.character_images:
+            self._reference_images = self._prepare_reference_images(self.character_images)
         self.client = self._build_client()
         self._supports_seed = bool(getattr(getattr(self.client, "_api_client", None), "vertexai", False)) if self.client else False
         if self._supports_seed:
@@ -169,9 +188,35 @@ class VeoClient:
 
     # Internal helpers -------------------------------------------------
 
+    def _prepare_reference_images(self, raw_images: list[bytes]) -> list[dict[str, Any]]:
+        """Resize, convert to JPEG, and base64-encode character reference images."""
+        if Image is None:
+            raise RuntimeError("Pillow is required for character reference images; install Pillow.")
+
+        results: list[dict[str, Any]] = []
+        for img_bytes in raw_images[: self.MAX_REFERENCE_IMAGES]:
+            img = Image.open(io.BytesIO(img_bytes))
+            img.thumbnail((1024, 1024))
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            results.append(
+                {
+                    "image": {"image_bytes": b64, "mime_type": "image/jpeg"},
+                    "reference_type": "asset",
+                }
+            )
+        logger.info("Prepared %d character reference image(s) for Veo", len(results))
+        return results
+
     def _safe_duration(self, prompt: MediaPrompt) -> int:
         # Veo supports 4, 6, or 8 second outputs; choose the smallest allowed duration
         # that can accommodate the requested length.
+        # reference_to_video (consistent character) only supports 8-second clips.
+        if self._reference_images:
+            return 8
         approx = max(4.0, min(8.0, float(prompt.duration_sec or 8)))
         for candidate in (4, 6, 8):
             if approx <= candidate:
@@ -179,10 +224,18 @@ class VeoClient:
         return 8
 
     def _compose_prompt(self, prompt: MediaPrompt) -> str:
-        segments = [prompt.visual_prompt]
+        if self._reference_images:
+            visual = self.CHARACTER_PROMPT_TEMPLATE.format(visual_prompt=prompt.visual_prompt)
+            segments = [visual]
+            if self.character_prompt_prefix:
+                segments.append(f"Voice style: {self.character_prompt_prefix}")
+            if prompt.transcript and prompt.transcript.strip():
+                segments.append(f"Scene dialogue: {prompt.transcript.strip()}")
+        else:
+            segments = [prompt.visual_prompt]
         segments.append(f"Audio direction: {prompt.audio_prompt}.")
-        if prompt.negative_prompt:
-            segments.append(f"Avoid: {prompt.negative_prompt}.")
+        # Negative prompt is passed separately via GenerateVideosConfig.negative_prompt;
+        # embedding it in the main prompt text can confuse safety filters.
         return "\n".join(segment for segment in segments if segment)
 
     def _create_job(self, prompt: MediaPrompt) -> types.GenerateVideosOperation:
@@ -196,14 +249,24 @@ class VeoClient:
             duration_seconds=duration,
             aspect_ratio=self.aspect_ratio,
             negative_prompt=prompt.negative_prompt,
+            person_generation="allow_adult",
         )
         if self._supports_seed:
             config_kwargs["seed"] = self.seed
             logger.debug("Using Veo seed %s for chunk %s", self.seed, prompt.chunk_id)
+        if self._reference_images:
+            config_kwargs["reference_images"] = self._reference_images
+            logger.info("Including %d reference image(s) for chunk %s", len(self._reference_images), prompt.chunk_id)
         config = types.GenerateVideosConfig(**config_kwargs)
+        composed_prompt = self._compose_prompt(prompt)
+        logger.info("[%s] visual_prompt   : %s", prompt.chunk_id, prompt.visual_prompt)
+        logger.info("[%s] transcript      : %s", prompt.chunk_id, prompt.transcript)
+        logger.info("[%s] audio_prompt    : %s", prompt.chunk_id, prompt.audio_prompt)
+        logger.info("[%s] negative_prompt : %s", prompt.chunk_id, prompt.negative_prompt or "(none)")
+        logger.info("[%s] composed_prompt : %s", prompt.chunk_id, composed_prompt)
         return self.client.models.generate_videos(
             model=self.model,
-            prompt=self._compose_prompt(prompt),
+            prompt=composed_prompt,
             config=config,
         )
 

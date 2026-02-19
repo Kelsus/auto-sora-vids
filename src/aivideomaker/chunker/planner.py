@@ -28,13 +28,72 @@ class WordTiming:
 class ChunkPlanner:
     """Translate narration timelines into Veo-friendly chunks."""
 
-    def plan(self, script: ScriptPlan, alignment: dict | None = None) -> ChunkPlan:
+    def plan(
+        self,
+        script: ScriptPlan,
+        alignment: dict | None = None,
+        one_clip_per_beat: bool = False,
+    ) -> ChunkPlan:
+        logger.info("ChunkPlanner.plan called: one_clip_per_beat=%s, alignment=%s, beats=%d",
+                     one_clip_per_beat, bool(alignment), len(script.beats))
+        if one_clip_per_beat:
+            result = self._plan_one_per_beat(script, alignment)
+            logger.info("one_clip_per_beat produced %d chunks: %s",
+                        len(result.chunks), [c.id for c in result.chunks])
+            return result
         if alignment:
             try:
                 return self._plan_with_alignment(script, alignment)
             except Exception as exc:  # pragma: no cover - defensive fallback
                 logger.warning("Alignment-driven planning failed; falling back to heuristic split: %s", exc)
         return self._plan_without_alignment(script)
+
+    # One clip per beat (e.g. for consistent-character with fixed clip duration) --
+
+    def _plan_one_per_beat(self, script: ScriptPlan, alignment: dict | None) -> ChunkPlan:
+        words: list[WordTiming] | None = None
+        if alignment:
+            try:
+                words = self._parse_alignment(script.full_transcript, alignment)
+            except Exception:
+                logger.warning("Alignment parsing failed in one_clip_per_beat; using heuristic durations")
+
+        word_iter = iter(words) if words else None
+        chunks: list[Chunk] = []
+        cursor = 0.0
+
+        for beat in script.beats:
+            text = beat.transcript.strip()
+            if word_iter:
+                beat_words = list(self._consume_words_for_text(word_iter, text))
+                if beat_words:
+                    start = beat_words[0].start
+                    end = beat_words[-1].end
+                    duration = float(self._apply_padding(end - start))
+                else:
+                    start = cursor
+                    duration = max(len(text.split()) / 2.5, MIN_CHUNK_DURATION)
+                    end = start + duration
+            else:
+                start = cursor
+                duration = max(len(text.split()) / 2.5, MIN_CHUNK_DURATION)
+                duration = float(self._apply_padding(duration))
+                end = start + duration
+
+            chunks.append(
+                Chunk(
+                    id=beat.id,
+                    beat_id=beat.id,
+                    transcript=text,
+                    estimated_duration_sec=duration,
+                    start_time_sec=start,
+                    end_time_sec=end,
+                )
+            )
+            cursor = end
+
+        total = sum(c.estimated_duration_sec for c in chunks)
+        return ChunkPlan(chunks=chunks, total_duration_sec=total)
 
     # Alignment-aware planning -------------------------------------------------
 

@@ -40,7 +40,7 @@ PROMPT_PRESETS: dict[str, PromptPreset] = {
         preset_id="docu_resolution_medium",
         visual_type="cinematic_broll",
         template=(
-            "Medium documentary shot that resolves the tension around {focus_phrase}. "
+            "Medium documentary shot that brings clarity to {focus_phrase}. "
             "Camera remains stable, single continuous move, grounded realism."
         ),
     ),
@@ -75,10 +75,12 @@ class MediaPromptBuilder:
         default_voice: str | None = None,
         negative_prompt: str | None = None,
         visual_style: Optional[dict] = None,
+        has_character: bool = False,
     ) -> None:
         self.default_voice = default_voice
         self.configured_negative_prompt = negative_prompt
         self.visual_style = visual_style or {}
+        self.has_character = has_character
         self.base_negations: list[str] = list(self.visual_style.get("bans", []))
         self.motion_defaults: list[str] = list(self.visual_style.get("motion", []))
         self.lens_hint: str | None = self.visual_style.get("lens")
@@ -156,17 +158,29 @@ class MediaPromptBuilder:
 
     def _visual_prompt(self, article: ArticleBundle, beat: Beat, duration: float) -> str:
         parts: list[str] = []
-        title = article.article.metadata.title
-        if title:
-            parts.append(f"Documentary-style coverage about {title}.")
+        if self.has_character:
+            if beat.visual_seed:
+                parts.append(beat.visual_seed.strip() + ".")
         else:
-            parts.append("Documentary-style news coverage.")
-
-        if beat.visual_seed:
-            parts.append(f"Focus on {beat.visual_seed.strip()}.")
+            title = article.article.metadata.title
+            if title:
+                parts.append(f"Documentary-style coverage about {title}.")
+            else:
+                parts.append("Documentary-style news coverage.")
+            if beat.visual_seed:
+                parts.append(f"Focus on {beat.visual_seed.strip()}.")
 
         if beat.intent:
             parts.append(f"Mood/intent: {beat.intent}.")
+
+        if self.has_character:
+            # Character mode: keep shot instructions minimal to reduce prompt
+            # bloat and safety-filter surface area.
+            shot_instructions: list[str] = ["Vertical 9:16 frame, cinematic realism."]
+            if self.palette:
+                shot_instructions.append(f"Color palette: {self.palette}.")
+            parts.append(" ".join(shot_instructions))
+            return " ".join(part.strip() for part in parts if part)
 
         visual_spec: BeatVisualSpec | None = beat.visual
         qc: BeatQCRules | None = beat.qc
@@ -181,7 +195,7 @@ class MediaPromptBuilder:
                 )
             )
 
-        shot_instructions: list[str] = []
+        shot_instructions = []
         if visual_spec:
             shot_instructions.extend(self._visual_type_instructions(visual_spec))
         shot_instructions.append("Vertical 9:16 frame, cinematic realism.")
@@ -210,9 +224,9 @@ class MediaPromptBuilder:
         return " ".join(part.strip() for part in parts if part)
 
     def _audio_prompt(self, beat) -> str:
-        mood = beat.audio_mood or "tense minimalistic score"
-        tension = "Increase tension" if beat.suspense_level >= 4 else "Maintain suspense"
-        return f"{mood}, {tension}, ensure space for voiceover"
+        mood = beat.audio_mood or "minimalistic underscore"
+        intensity = "Build intensity" if beat.suspense_level >= 4 else "Maintain steady pace"
+        return f"{mood}, {intensity}, ensure space for voiceover"
 
     def _negative_prompt(self, beat: Beat) -> str | None:
         elements: list[str] = []
@@ -221,21 +235,27 @@ class MediaPromptBuilder:
 
         self._extend_unique(elements, self.base_negations)
 
-        visual_spec = beat.visual
-        if visual_spec and visual_spec.negations:
-            self._extend_unique(elements, visual_spec.negations)
-
-        qc = beat.qc
-        if qc:
-            if not qc.allow_text:
-                self._extend_unique(elements, ["text", "captions", "subtitles"])
-            if not qc.allow_numbers:
-                self._extend_unique(elements, ["digits", "numbers", "charts"])
-            if not qc.allow_split_screen:
-                self._extend_unique(elements, ["split screen", "side-by-side layout"])
+        if self.has_character:
+            # Character mode: keep negations minimal to reduce safety-filter surface area.
+            # Only user-configured and style-level negations apply above; skip the
+            # heavy documentary/QC/motion negation boilerplate.
+            pass
         else:
-            # Default to banning split screens when QC not specified.
-            self._extend_unique(elements, ["split screen", "side-by-side layout"])
+            visual_spec = beat.visual
+            if visual_spec and visual_spec.negations:
+                self._extend_unique(elements, visual_spec.negations)
+
+            qc = beat.qc
+            if qc:
+                if not qc.allow_text:
+                    self._extend_unique(elements, ["text", "captions", "subtitles"])
+                if not qc.allow_numbers:
+                    self._extend_unique(elements, ["digits", "numbers", "charts"])
+                if not qc.allow_split_screen:
+                    self._extend_unique(elements, ["split screen", "side-by-side layout"])
+            else:
+                # Default to banning split screens when QC not specified.
+                self._extend_unique(elements, ["split screen", "side-by-side layout"])
 
         if not elements:
             return None
@@ -256,12 +276,17 @@ class MediaPromptBuilder:
         visual_prompt: str,
         negative_prompt: Optional[str],
     ) -> tuple[str, Optional[str]]:
-        if "single continuous" not in visual_prompt.lower():
-            visual_prompt = visual_prompt.strip() + " Single continuous shot, no split screens or overlays."
         if "vertical" not in visual_prompt.lower():
             visual_prompt = visual_prompt.strip() + " Vertical 9:16 composition."
 
-        required_negatives = []
+        if self.has_character:
+            # Character mode: skip heavy negation enforcement to keep prompt lean.
+            return visual_prompt.strip(), negative_prompt
+
+        if "single continuous" not in visual_prompt.lower():
+            visual_prompt = visual_prompt.strip() + " Single continuous shot, no split screens or overlays."
+
+        required_negatives: list[str] = []
         qc = beat.qc
         if qc is None or not qc.allow_split_screen:
             required_negatives.extend(["split screen", "side-by-side layout"])
@@ -271,7 +296,7 @@ class MediaPromptBuilder:
             required_negatives.extend(["numbers", "digits", "charts"])
         required_negatives.extend(self._common_sense_motion_negatives(beat))
 
-        current_negatives = []
+        current_negatives: list[str] = []
         if negative_prompt:
             current_negatives = [part.strip() for part in negative_prompt.split(",") if part.strip()]
         self._extend_unique(current_negatives, required_negatives)

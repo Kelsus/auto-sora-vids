@@ -549,6 +549,14 @@ class VideoAutomationStack(Stack):
         )
         jobs_table.grant_read_write_data(worker_lambda)
         output_bucket.grant_read_write(worker_lambda)
+
+        # Grant read access to the Veo characters bucket (cross-stack)
+        characters_bucket_name = self.node.try_get_context("veoCharactersBucketName") or "veogeneratorstack-charactersbucketedbea08e-qmgcsrinycki"
+        characters_bucket = s3.Bucket.from_bucket_name(
+            self, "VeoCharactersBucket", characters_bucket_name
+        )
+        characters_bucket.grant_read(worker_lambda)
+
         for env_var, parameter, name in secret_parameters:
             worker_lambda.add_environment(env_var, name)
             parameter.grant_read(worker_lambda)
@@ -623,6 +631,7 @@ class VideoAutomationStack(Stack):
                 "clipId.$": "$$.Map.Item.Value",
             },
             result_path=sfn.JsonPath.DISCARD,
+            max_concurrency_path="$.renderConcurrency",
         )
         composite_clip_task = tasks.LambdaInvoke(
             self,
@@ -658,7 +667,7 @@ class VideoAutomationStack(Stack):
             ),
             result_path="$.renderJob",
             payload_response_only=True,
-            task_timeout=sfn.Timeout.duration(Duration.minutes(2)),
+            task_timeout=sfn.Timeout.duration(Duration.minutes(15)),
         )
 
         wait_for_render = sfn.Wait(
@@ -789,13 +798,37 @@ class VideoAutomationStack(Stack):
         generate_captions_task.add_catch(failure_chain, result_path="$.error")
 
         review_hold_state = sfn.Succeed(self, "AwaitingReview")
-        render_chain = sfn.Chain.start(render_clips_map).next(stitch_task).next(generate_captions_task)
+
+        # Serialize clip rendering when using consistent-character reference
+        # images to avoid Veo rate-limit rejections. 0 = unlimited parallelism.
+        set_sequential_render = sfn.Pass(
+            self, "SequentialRender",
+            result=sfn.Result.from_number(1),
+            result_path="$.renderConcurrency",
+        )
+        set_parallel_render = sfn.Pass(
+            self, "ParallelRender",
+            result=sfn.Result.from_number(0),
+            result_path="$.renderConcurrency",
+        )
+        set_sequential_render.next(render_clips_map)
+        set_parallel_render.next(render_clips_map)
+
+        render_mode_choice = sfn.Choice(self, "CharacterMode?")
+        render_mode_choice.when(
+            sfn.Condition.is_present("$.jobContext.pipelineConfig.veo_character_id"),
+            set_sequential_render,
+        )
+        render_mode_choice.otherwise(set_parallel_render)
+
+        sfn.Chain.start(render_clips_map).next(stitch_task).next(generate_captions_task)
+
         review_gate = sfn.Choice(self, "PauseForReview?")
         review_gate.when(
             sfn.Condition.boolean_equals("$.jobContext.pipelineConfig.pause_after_prompts", True),
             review_hold_state,
         )
-        review_gate.otherwise(render_chain)
+        review_gate.otherwise(render_mode_choice)
 
         workflow_definition = initialize_state.next(generate_prompts_task).next(review_gate)
         state_machine = sfn.StateMachine(
@@ -855,14 +888,24 @@ class VideoAutomationStack(Stack):
         state_machine.grant_start_execution(dispatcher_lambda)
 
         # VideoPusher integration - forward completed videos directly to VideoPusher uploads
-        videopusher_table_name = self.node.try_get_context("videopusherTableName") or "VideopusherStack-UploadsTableFE9AB9DB-1L3UFLK5YBN28"
+        _vp_defaults = {
+            "kelsus-prod": {
+                "table": "VideopusherStack-UploadsTableFE9AB9DB-1L3UFLK5YBN28",
+                "bucket": "videopusherstack-rawbucket0c3ee094-xz5othtwb066",
+            },
+        }
+        _vp_env = _vp_defaults.get(stage, {
+            "table": "VideopusherStack-UploadsTableFE9AB9DB-13GWRMKSNB3CK",
+            "bucket": "videopusherstack-rawbucket0c3ee094-t0atgcnbkxxi",
+        })
+        videopusher_table_name = self.node.try_get_context("videopusherTableName") or _vp_env["table"]
         videopusher_table = dynamodb.Table.from_table_name(
             self,
             "VideoPusherUploadsTable",
             videopusher_table_name,
         )
 
-        videopusher_bucket_name = self.node.try_get_context("videopusherBucketName") or "videopusherstack-rawbucket0c3ee094-xz5othtwb066"
+        videopusher_bucket_name = self.node.try_get_context("videopusherBucketName") or _vp_env["bucket"]
         videopusher_bucket = s3.Bucket.from_bucket_name(
             self,
             "VideoPusherRawBucket",

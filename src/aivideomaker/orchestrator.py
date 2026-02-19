@@ -180,7 +180,7 @@ class PipelineConfig(BaseModel):
     max_automatic_charts: int = 5
     chart_analysis_excerpt_chars: int = 2600
     # Veo configuration
-    veo_model: str = "veo-3.0-generate-001"
+    veo_model: str = "veo-3.1-generate-preview"
     veo_api_key_env: str = "GOOGLE_API_KEY"
     veo_aspect_ratio: str = "9:16"
     veo_poll_interval: float = 10.0
@@ -192,6 +192,12 @@ class PipelineConfig(BaseModel):
     veo_location: str = "us-central1"
     veo_credentials_path: Optional[Path] = None
     veo_credentials_parameter: Optional[str] = None
+    # Veo character (consistent character) configuration
+    veo_character_id: Optional[str] = None
+    veo_characters_bucket: Optional[str] = None
+    veo_character_images: list[Path] = Field(default_factory=list)
+    veo_voice_description: Optional[str] = None
+    veo_presenter_description: Optional[str] = None
     # Gemini Image configuration (for chart composition)
     gemini_image_model: str = "gemini-2.0-flash-exp"
     gemini_use_vertex: bool = True
@@ -338,6 +344,14 @@ class PipelineOrchestrator:
                 submit_cooldown=config.sora_submit_cooldown,
             )
         elif provider == "veo":
+            character_images: list[bytes] | None = None
+            if config.veo_character_images:
+                character_images = [
+                    Path(p).read_bytes() for p in config.veo_character_images if Path(p).exists()
+                ]
+                if not character_images:
+                    logger.warning("veo_character_images specified but no files found")
+                    character_images = None
             media_client = VeoClient(
                 asset_dir=None,
                 api_key=os.getenv(config.veo_api_key_env),
@@ -352,6 +366,8 @@ class PipelineOrchestrator:
                 location=config.veo_location,
                 credentials_path=config.veo_credentials_path,
                 credentials_parameter=config.veo_credentials_parameter,
+                character_images=character_images,
+                character_prompt_prefix=config.veo_voice_description,
             )
         else:
             raise ValueError(f"Unsupported media_provider '{config.media_provider}'")
@@ -467,6 +483,7 @@ class PipelineOrchestrator:
                 default_voice=config.voice_id,
                 negative_prompt=config.negative_prompt,
                 visual_style=visual_style_dict,
+                has_character=bool(config.veo_character_images),
             ),
             media_client=media_client,
             voice_manager=VoiceSessionManager(
@@ -921,6 +938,8 @@ class PipelineOrchestrator:
                 chart_outline=chart_outline,
                 style_directive=self.style_directive,
                 length_profile=self.length_profile,
+                has_character=bool(self.config.veo_character_images),
+                presenter_description=self.config.veo_presenter_description,
             )
 
             review_decision = None
@@ -1028,11 +1047,13 @@ class PipelineOrchestrator:
         alignment_payload: dict | None = None
 
         script_text = script.full_transcript
+        has_character = bool(self.config.veo_character_images)
         should_prepare_voice = (
             self.voice_manager.eleven_client
             and script_text.strip()
             and not dry_run
             and (not prompts_only or self.config.prepare_voice_during_prompts)
+            and not has_character
         )
 
         if should_prepare_voice:
@@ -1046,6 +1067,13 @@ class PipelineOrchestrator:
                 alignment_payload = narration_asset.alignment_payload
             except Exception as exc:  # pragma: no cover - defensive safeguard around TTS
                 logger.error("💥  Failed to prepare narration during planning: %s", exc)
+        elif has_character and script_text.strip():
+            # Character mode skips TTS but still needs a transcript file for the dashboard.
+            transcript_dir = self.voice_manager.base_dir / "default"
+            transcript_dir.mkdir(parents=True, exist_ok=True)
+            transcript_path = transcript_dir / "transcript.txt"
+            transcript_path.write_text(script_text, encoding="utf-8")
+            narration_asset = NarrationAsset(transcript_path=transcript_path)
 
         allow_music_generation = script_greenlit and not prompts_only
 
@@ -1076,8 +1104,9 @@ class PipelineOrchestrator:
                 logger.error("💥  Failed to generate ElevenLabs music track: %s", exc)
                 music_path = None
 
-        logger.info("🧩  Planning Veo-sized segments")
-        chunks = self.chunk_planner.plan(script, alignment=alignment_payload)
+        logger.info("🧩  Planning Veo-sized segments (veo_character_images=%s)", self.config.veo_character_images)
+        one_clip_per_beat = bool(self.config.veo_character_images)
+        chunks = self.chunk_planner.plan(script, alignment=alignment_payload, one_clip_per_beat=one_clip_per_beat)
 
         logger.info("🛠️  Building structured prompts")
         prompts = self.prompt_builder.build(
@@ -1883,12 +1912,20 @@ class PipelineOrchestrator:
         except ValueError:
             return None
 
-    def _collect_existing_assets(self, bundle: PipelineBundle, sora_dir: Path) -> list[Path]:
+    def _collect_existing_assets(self, bundle: PipelineBundle, sora_dir: Path, veo_dir: Path | None = None) -> list[Path]:
         assets: list[Path] = []
         for prompt in bundle.prompts.media_prompts:
             clip_path = sora_dir / f"{prompt.chunk_id}.mp4"
+            if not clip_path.exists() and veo_dir:
+                clip_path = veo_dir / f"{prompt.chunk_id}.mp4"
             if not clip_path.exists():
-                raise RuntimeError(f"Missing clip for stitch-only mode: {clip_path}")
+                candidates = [str(sora_dir)]
+                if veo_dir:
+                    candidates.append(str(veo_dir))
+                raise RuntimeError(
+                    f"Missing clip for stitch-only mode: {prompt.chunk_id}.mp4 "
+                    f"(searched: {', '.join(candidates)})"
+                )
             assets.append(clip_path)
         return assets
 
@@ -1952,7 +1989,7 @@ class PipelineOrchestrator:
                 alignment_path=alignment_path,
                 alignment_payload=bundle.narration_alignment_payload,
             )
-        elif not prompts_only:
+        elif not prompts_only and not bool(self.config.veo_character_images):
             logger.info("🎙️  Preparing narration audio")
             script_text = bundle.script.full_transcript
             voice_id = self.config.narration_voice_id or self.config.voice_id
@@ -1978,7 +2015,8 @@ class PipelineOrchestrator:
             )
             if should_replan:
                 logger.info("🔁  Recomputing chunk timeline from narration alignment")
-                chunks_plan = self.chunk_planner.plan(bundle.script, alignment=alignment_payload)
+                one_clip_per_beat = bool(self.config.veo_character_images)
+                chunks_plan = self.chunk_planner.plan(bundle.script, alignment=alignment_payload, one_clip_per_beat=one_clip_per_beat)
                 prompts_bundle = self.prompt_builder.build(
                     bundle.article,
                     bundle.script,
@@ -2011,7 +2049,7 @@ class PipelineOrchestrator:
         if prompts_only:
             logger.info("🚧  Prompts-only mode: skipping media submission")
         elif stitch_only:
-            media_assets = self._collect_existing_assets(bundle, run_dirs["sora_dir"])
+            media_assets = self._collect_existing_assets(bundle, run_dirs["sora_dir"], run_dirs.get("veo_dir"))
         else:
             prepared_prompts: list[MediaPrompt] = []
 
@@ -2125,7 +2163,8 @@ class PipelineOrchestrator:
             and media_assets
         )
         if should_stitch:
-            voice_track = narration_asset.audio_path if narration_asset else None
+            is_character_mode = bool(self.config.veo_character_images)
+            voice_track = None if is_character_mode else (narration_asset.audio_path if narration_asset else None)
             # When stitch_only, don't burn captions - let the separate caption generation step handle it
             # This avoids needing system ffmpeg in Docker (uses imageio-ffmpeg bundled binary instead)
             stitch_captions_ass = None if stitch_only else captions_ass_path
@@ -2136,6 +2175,7 @@ class PipelineOrchestrator:
                 captions=caption_segments,
                 captions_ass=stitch_captions_ass,
                 output_basename=bundle.article.slug,
+                keep_video_audio=is_character_mode,
             )
         else:
             reason = "prompts-only mode" if prompts_only else "dry run or no assets"
