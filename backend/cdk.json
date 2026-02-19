@@ -3,6 +3,8 @@
   "context": {
     "@aws-cdk/core:stackRelativeExports": true,
     "@aws-cdk/aws-lambda:recognizeVersionProps": true,
-    "aws-cdk:enableDiffNoFail": "true"
+    "aws-cdk:enableDiffNoFail": "true",
+    "kelsus-dev:jobsApiKeyId": "2n80xiybbc",
+    "prod:jobsApiKeyId": "e0gkvlteva"
   }
 }

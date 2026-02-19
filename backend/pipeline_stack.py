@@ -212,7 +212,10 @@ class VideoAutomationStack(Stack):
         jobs_resource.add_method("POST", jobs_integration, api_key_required=True)
 
         api_key_value = self.node.try_get_context("jobsApiKey")
-        api_key_id = self.node.try_get_context("jobsApiKeyId")
+        api_key_id = (
+            self.node.try_get_context(f"{stage}:jobsApiKeyId")
+            or self.node.try_get_context("jobsApiKeyId")
+        )
 
         if api_key_id:
             api_key = apigateway.ApiKey.from_api_key_id(
@@ -892,7 +895,7 @@ class VideoAutomationStack(Stack):
 
         # VideoPusher integration - forward completed videos directly to VideoPusher uploads
         _vp_defaults = {
-            "kelsus-prod": {
+            "prod": {
                 "table": "VideopusherStack-UploadsTableFE9AB9DB-1L3UFLK5YBN28",
                 "bucket": "videopusherstack-rawbucket0c3ee094-xz5othtwb066",
             },
