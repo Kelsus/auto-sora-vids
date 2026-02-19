@@ -19,6 +19,7 @@ class WorkerSettings:
     openai_api_key_parameter: Optional[str] = None
     elevenlabs_api_key_parameter: Optional[str] = None
     google_api_key_parameter: Optional[str] = None
+    veo_characters_bucket: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "WorkerSettings":
@@ -36,6 +37,7 @@ class WorkerSettings:
             openai_api_key_parameter=os.environ.get("OPENAI_API_KEY_PARAMETER"),
             elevenlabs_api_key_parameter=os.environ.get("ELEVEN_LABS_API_KEY_PARAMETER"),
             google_api_key_parameter=os.environ.get("GOOGLE_API_KEY_PARAMETER"),
+            veo_characters_bucket=os.environ.get("VEO_CHARACTERS_BUCKET"),
         )
 
     def bundle_key(self, job_id: str) -> str:

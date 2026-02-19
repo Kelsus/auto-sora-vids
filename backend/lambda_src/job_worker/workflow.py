@@ -952,7 +952,7 @@ class PipelineWorkflow:
     def _ensure_character_images(self, overrides: Dict[str, Any]) -> None:
         """Download character images from S3 if configured but not yet resolved."""
         character_id = overrides.get("veo_character_id")
-        characters_bucket = overrides.get("veo_characters_bucket")
+        characters_bucket = overrides.get("veo_characters_bucket") or self._settings.veo_characters_bucket
         if character_id and characters_bucket and not overrides.get("veo_character_images"):
             char_paths, voice_desc, presenter_desc = self._load_character_assets(character_id, characters_bucket)
             if char_paths:
