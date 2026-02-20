@@ -199,6 +199,7 @@ class PipelineConfig(BaseModel):
     veo_character_images: list[Path] = Field(default_factory=list)
     veo_voice_description: Optional[str] = None
     veo_presenter_description: Optional[str] = None
+    veo_character_prompt_prefix: Optional[str] = None
     # Gemini Image configuration (for chart composition)
     gemini_image_model: str = "gemini-2.0-flash-exp"
     gemini_use_vertex: bool = True
@@ -370,7 +371,9 @@ class PipelineOrchestrator:
                 credentials_path=config.veo_credentials_path,
                 credentials_parameter=config.veo_credentials_parameter,
                 character_images=character_images,
-                character_prompt_prefix=config.veo_voice_description,
+                character_prompt_prefix=config.veo_character_prompt_prefix,
+                presenter_description=config.veo_presenter_description,
+                voice_description=config.veo_voice_description,
             )
         else:
             raise ValueError(f"Unsupported media_provider '{config.media_provider}'")

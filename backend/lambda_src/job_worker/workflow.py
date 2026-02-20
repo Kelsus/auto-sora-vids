@@ -843,8 +843,14 @@ class PipelineWorkflow:
                 logger.exception("Failed to download user image %s", key)
         return local_paths
 
-    def _load_character_assets(self, character_id: str, characters_bucket: str) -> tuple[list[Path], str | None, str | None]:
-        """Download character reference images, voice description, and presenter description from S3 metadata."""
+    def _load_character_assets(
+        self, character_id: str, characters_bucket: str
+    ) -> tuple[list[Path], str | None, str | None, str | None, str | None]:
+        """Download character reference images and metadata from S3.
+
+        Returns (image_paths, voice_description, presenter_description,
+                 prompt_prefix, negative_prompt).
+        """
         import boto3
 
         char_dir = self._settings.data_root / "characters" / character_id
@@ -857,10 +863,12 @@ class PipelineWorkflow:
             metadata = json.loads(resp["Body"].read().decode("utf-8"))
         except Exception:
             logger.exception("Failed to load character metadata from s3://%s/%s", characters_bucket, metadata_key)
-            return [], None, None
+            return [], None, None, None, None
 
         voice_description: str | None = metadata.get("voiceDescription")
         presenter_description: str | None = metadata.get("presenterDescription")
+        prompt_prefix: str | None = metadata.get("promptPrefix")
+        negative_prompt: str | None = metadata.get("negativePrompt")
 
         image_names = metadata.get("referenceImages", [])
         local_paths: list[Path] = []
@@ -873,7 +881,7 @@ class PipelineWorkflow:
                 logger.info("Downloaded character image s3://%s/%s", characters_bucket, image_key)
             except Exception:
                 logger.exception("Failed to download character image %s", image_key)
-        return local_paths, voice_description, presenter_description
+        return local_paths, voice_description, presenter_description, prompt_prefix, negative_prompt
 
     def _resolve_caption_play_res(self, overrides: Optional[Mapping[str, Any]]) -> tuple[int, int]:
         candidate: Optional[str] = None
@@ -954,13 +962,20 @@ class PipelineWorkflow:
         character_id = overrides.get("veo_character_id")
         characters_bucket = self._settings.veo_characters_bucket or overrides.get("veo_characters_bucket")
         if character_id and characters_bucket and not overrides.get("veo_character_images"):
-            char_paths, voice_desc, presenter_desc = self._load_character_assets(character_id, characters_bucket)
+            char_paths, voice_desc, presenter_desc, prompt_prefix, char_neg = self._load_character_assets(
+                character_id, characters_bucket
+            )
             if char_paths:
                 overrides["veo_character_images"] = [str(p) for p in char_paths]
             if voice_desc and not overrides.get("veo_voice_description"):
                 overrides["veo_voice_description"] = voice_desc
             if presenter_desc and not overrides.get("veo_presenter_description"):
                 overrides["veo_presenter_description"] = presenter_desc
+            if prompt_prefix and not overrides.get("veo_character_prompt_prefix"):
+                overrides["veo_character_prompt_prefix"] = prompt_prefix
+            if char_neg:
+                existing_neg = overrides.get("negative_prompt", "")
+                overrides["negative_prompt"] = f"{existing_neg}, {char_neg}" if existing_neg else char_neg
 
     def _get_runner(self, overrides: Optional[Dict[str, Any]]) -> PipelineRunner:
         if self._injected_runner is not None:
