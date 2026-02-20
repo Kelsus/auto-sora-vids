@@ -30,6 +30,7 @@ from aivideomaker.script_engine.model import Beat, BeatQCRules, BeatVisualSpec, 
 from aivideomaker.script_engine.directives import (
     NarrativeStyleDirective,
     VideoLengthProfile,
+    adapt_profile_for_character,
     get_length_profile,
     get_style_directive,
 )
@@ -198,6 +199,7 @@ class PipelineConfig(BaseModel):
     veo_character_images: list[Path] = Field(default_factory=list)
     veo_voice_description: Optional[str] = None
     veo_presenter_description: Optional[str] = None
+    veo_character_prompt_prefix: Optional[str] = None
     # Gemini Image configuration (for chart composition)
     gemini_image_model: str = "gemini-2.0-flash-exp"
     gemini_use_vertex: bool = True
@@ -328,6 +330,8 @@ class PipelineOrchestrator:
         data_root = config.data_root
         placeholder_root = data_root / ".placeholder"
         length_profile = config.resolve_length_profile()
+        if bool(config.veo_character_images):
+            length_profile = adapt_profile_for_character(length_profile)
         style_directive = config.resolve_style_directive()
         suppress_charts = bool(config.input_images)
 
@@ -367,7 +371,9 @@ class PipelineOrchestrator:
                 credentials_path=config.veo_credentials_path,
                 credentials_parameter=config.veo_credentials_parameter,
                 character_images=character_images,
-                character_prompt_prefix=config.veo_voice_description,
+                character_prompt_prefix=config.veo_character_prompt_prefix,
+                presenter_description=config.veo_presenter_description,
+                voice_description=config.veo_voice_description,
             )
         else:
             raise ValueError(f"Unsupported media_provider '{config.media_provider}'")
@@ -1052,8 +1058,8 @@ class PipelineOrchestrator:
             self.voice_manager.eleven_client
             and script_text.strip()
             and not dry_run
-            and (not prompts_only or self.config.prepare_voice_during_prompts)
             and not has_character
+            and (not prompts_only or self.config.prepare_voice_during_prompts)
         )
 
         if should_prepare_voice:
@@ -1068,7 +1074,7 @@ class PipelineOrchestrator:
             except Exception as exc:  # pragma: no cover - defensive safeguard around TTS
                 logger.error("💥  Failed to prepare narration during planning: %s", exc)
         elif has_character and script_text.strip():
-            # Character mode skips TTS but still needs a transcript file for the dashboard.
+            # No TTS client available in character mode — write transcript for dashboard only.
             transcript_dir = self.voice_manager.base_dir / "default"
             transcript_dir.mkdir(parents=True, exist_ok=True)
             transcript_path = transcript_dir / "transcript.txt"
@@ -2125,10 +2131,11 @@ class PipelineOrchestrator:
                     stored = self._try_rel_path(asset_path, run_dirs["run_dir"]) or asset_path
                     media_assets.append(stored)
 
-        # Build captions: prefer ASS karaoke when alignment is present
+        # Build captions: ASS karaoke when alignment is present or character mode
         caption_segments: list[CaptionSegment] = []
         captions_ass_path: Path | None = None
-        if alignment_payload:
+        is_char = bool(self.config.veo_character_images)
+        if alignment_payload or is_char:
             try:
                 # Derive play resolution from Sora/Veo settings when possible
                 play_res = (720, 1280)
@@ -2140,10 +2147,11 @@ class PipelineOrchestrator:
                     pass
                 captions_ass_path = write_karaoke_ass(
                     script=bundle.script,
-                    alignment=alignment_payload,
+                    alignment=None if is_char else alignment_payload,
                     chunks=chunks_plan,
                     export_dir=run_dirs["export_dir"],
                     play_res=play_res,
+                    beat_duration=8.0 if is_char else None,
                 )
                 logger.info("Generated karaoke captions at %s", captions_ass_path)
             except Exception as exc:  # pragma: no cover - defensive path

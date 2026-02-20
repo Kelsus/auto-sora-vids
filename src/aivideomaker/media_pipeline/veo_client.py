@@ -72,6 +72,8 @@ class VeoClient:
         credentials_parameter: str | None = None,
         character_images: list[bytes] | None = None,
         character_prompt_prefix: str | None = None,
+        presenter_description: str | None = None,
+        voice_description: str | None = None,
     ) -> None:
         self._asset_dir = Path(asset_dir) if asset_dir is not None else None
         self.api_key = api_key
@@ -91,6 +93,8 @@ class VeoClient:
         self._credentials = None
         self.character_images = character_images
         self.character_prompt_prefix = character_prompt_prefix
+        self.presenter_description = presenter_description
+        self.voice_description = voice_description
         self._reference_images: list[dict[str, Any]] | None = None
         if self.character_images:
             self._reference_images = self._prepare_reference_images(self.character_images)
@@ -225,12 +229,24 @@ class VeoClient:
 
     def _compose_prompt(self, prompt: MediaPrompt) -> str:
         if self._reference_images:
-            visual = self.CHARACTER_PROMPT_TEMPLATE.format(visual_prompt=prompt.visual_prompt)
-            segments = [visual]
+            segments: list[str] = []
+            # Character identity block — tells Veo what the character is so it
+            # doesn't drift from the reference images (e.g. adding human features
+            # to a robot character).
+            identity_parts: list[str] = []
+            if self.presenter_description:
+                identity_parts.append(self.presenter_description)
             if self.character_prompt_prefix:
-                segments.append(f"Voice style: {self.character_prompt_prefix}")
+                identity_parts.append(self.character_prompt_prefix)
+            if identity_parts:
+                segments.append("Character: " + ". ".join(p.rstrip(".") for p in identity_parts) + ".")
+            visual = self.CHARACTER_PROMPT_TEMPLATE.format(visual_prompt=prompt.visual_prompt)
+            segments.append(visual)
+            if self.voice_description:
+                segments.append(f"Voice style: {self.voice_description}")
             if prompt.transcript and prompt.transcript.strip():
                 segments.append(f"Scene dialogue: {prompt.transcript.strip()}")
+            segments.append("No on-screen text, captions, or subtitles.")
         else:
             segments = [prompt.visual_prompt]
         segments.append(f"Audio direction: {prompt.audio_prompt}.")

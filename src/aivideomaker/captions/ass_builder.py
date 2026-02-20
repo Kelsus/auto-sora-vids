@@ -89,6 +89,33 @@ def _parse_alignment(transcript: str, alignment: dict) -> list[WordTiming]:
     return words
 
 
+def _synthesize_beat_word_timings(
+    script: ScriptPlan,
+    beat_duration: float = 8.0,
+    lead_in: float = 0.5,
+    trail: float = 0.3,
+) -> list[WordTiming]:
+    """Generate evenly-spaced word timings for character mode where Veo produces the audio.
+
+    Each beat maps to one *beat_duration*-second clip. Words are distributed
+    uniformly within the speaking window (after *lead_in*, before *trail*).
+    """
+    words: list[WordTiming] = []
+    speaking_window = beat_duration - lead_in - trail
+    for i, beat in enumerate(script.beats):
+        beat_start = i * beat_duration + lead_in
+        beat_words = beat.transcript.strip().split()
+        if not beat_words:
+            continue
+        word_slot = speaking_window / len(beat_words)
+        for j, token in enumerate(beat_words):
+            w_start = beat_start + j * word_slot
+            # Small gap between words so karaoke highlight doesn't bleed
+            w_end = w_start + word_slot * 0.85
+            words.append(WordTiming(text=token, start=w_start, end=w_end))
+    return words
+
+
 def _consume_words_for_text(word_iter: Iterator[WordTiming], text: str) -> Iterable[WordTiming]:
     import re
 
@@ -155,7 +182,7 @@ def _estimate_text_width(text: str, font_name: str, font_size: int, outline: int
 def build_karaoke_ass(
     *,
     script: ScriptPlan,
-    alignment: dict,
+    alignment: dict | None = None,
     chunks: ChunkPlan | None = None,
     play_res: tuple[int, int] = (720, 1280),
     style_name: str = "TikTok",
@@ -166,6 +193,7 @@ def build_karaoke_ass(
     line_position_ratio: float = 0.58,
     max_chars_per_line: int = 28,  # Reduced from 32 to be more conservative
     max_line_duration: float = 3.0,
+    beat_duration: float | None = None,
 ) -> str:
     # Header and styles (Primary white, Secondary yellow for karaoke fill, Outline black)
     res_x, res_y = play_res
@@ -185,8 +213,14 @@ def build_karaoke_ass(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
-    # Build global word list aligned to the full transcript
-    words = _parse_alignment(script.full_transcript, alignment)
+    # Build global word list — synthetic timing for character mode,
+    # ElevenLabs alignment otherwise.
+    if beat_duration is not None:
+        words = _synthesize_beat_word_timings(script, beat_duration=beat_duration)
+    elif alignment is not None:
+        words = _parse_alignment(script.full_transcript, alignment)
+    else:
+        raise ValueError("Either alignment or beat_duration must be provided")
     word_iter = iter(words)
 
     events: list[str] = []
@@ -308,13 +342,16 @@ def build_karaoke_ass(
 def write_karaoke_ass(
     *,
     script: ScriptPlan,
-    alignment: dict,
-    chunks: ChunkPlan | None,
+    alignment: dict | None = None,
+    chunks: ChunkPlan | None = None,
     export_dir: Path,
     play_res: tuple[int, int] = (720, 1280),
+    beat_duration: float | None = None,
 ) -> Path:
     export_dir.mkdir(parents=True, exist_ok=True)
-    content = build_karaoke_ass(script=script, alignment=alignment, chunks=chunks, play_res=play_res)
+    content = build_karaoke_ass(
+        script=script, alignment=alignment, chunks=chunks, play_res=play_res, beat_duration=beat_duration,
+    )
     path = export_dir / "captions.ass"
     path.write_text(content, encoding="utf-8")
     return path

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass
 from typing import Sequence
@@ -200,8 +201,44 @@ def get_length_profile(name: str | None) -> VideoLengthProfile:
     profile = VIDEO_LENGTH_PRESETS.get(key)
     if profile:
         return profile
+    # Try to parse as a raw duration and build a profile on the fly.
+    digits = re.sub(r"[^0-9.]", "", key)
+    if digits:
+        try:
+            secs = float(digits)
+            if secs > 0:
+                return _build_dynamic_profile(secs)
+        except ValueError:
+            pass
     logger.warning("Unknown video_length '%s'; falling back to %s", name, DEFAULT_LENGTH_KEY)
     return VIDEO_LENGTH_PRESETS[DEFAULT_LENGTH_KEY]
+
+
+def _build_dynamic_profile(target_sec: float) -> VideoLengthProfile:
+    """Build a reasonable profile for an arbitrary duration."""
+    beat_count = max(2, round(target_sec / 8))
+    beat_dur = target_sec / beat_count
+    return VideoLengthProfile(
+        key=f"{int(target_sec)}s",
+        target_runtime_sec=target_sec,
+        target_beat_count=beat_count,
+        min_beat_duration_sec=max(3.0, beat_dur - 2.0),
+        max_beat_duration_sec=beat_dur + 2.0,
+        default_beat_duration_sec=beat_dur,
+    )
+
+
+def adapt_profile_for_character(profile: VideoLengthProfile) -> VideoLengthProfile:
+    """Override a profile for character mode where every Veo clip is 8 seconds."""
+    beat_count = max(1, math.ceil(profile.target_runtime_sec / 8))
+    return VideoLengthProfile(
+        key=profile.key,
+        target_runtime_sec=beat_count * 8.0,
+        target_beat_count=beat_count,
+        min_beat_duration_sec=8.0,
+        max_beat_duration_sec=8.0,
+        default_beat_duration_sec=8.0,
+    )
 
 
 def get_style_directive(name: str | None) -> NarrativeStyleDirective:
