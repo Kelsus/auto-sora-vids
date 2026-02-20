@@ -30,6 +30,7 @@ from aivideomaker.script_engine.model import Beat, BeatQCRules, BeatVisualSpec, 
 from aivideomaker.script_engine.directives import (
     NarrativeStyleDirective,
     VideoLengthProfile,
+    adapt_profile_for_character,
     get_length_profile,
     get_style_directive,
 )
@@ -328,6 +329,8 @@ class PipelineOrchestrator:
         data_root = config.data_root
         placeholder_root = data_root / ".placeholder"
         length_profile = config.resolve_length_profile()
+        if bool(config.veo_character_images):
+            length_profile = adapt_profile_for_character(length_profile)
         style_directive = config.resolve_style_directive()
         suppress_charts = bool(config.input_images)
 
