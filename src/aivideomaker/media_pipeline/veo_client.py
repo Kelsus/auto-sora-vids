@@ -231,6 +231,7 @@ class VeoClient:
                 segments.append(f"Voice style: {self.character_prompt_prefix}")
             if prompt.transcript and prompt.transcript.strip():
                 segments.append(f"Scene dialogue: {prompt.transcript.strip()}")
+            segments.append("No on-screen text, captions, or subtitles.")
         else:
             segments = [prompt.visual_prompt]
         segments.append(f"Audio direction: {prompt.audio_prompt}.")

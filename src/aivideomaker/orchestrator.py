@@ -1053,7 +1053,6 @@ class PipelineOrchestrator:
             and script_text.strip()
             and not dry_run
             and (not prompts_only or self.config.prepare_voice_during_prompts)
-            and not has_character
         )
 
         if should_prepare_voice:
@@ -1068,7 +1067,7 @@ class PipelineOrchestrator:
             except Exception as exc:  # pragma: no cover - defensive safeguard around TTS
                 logger.error("💥  Failed to prepare narration during planning: %s", exc)
         elif has_character and script_text.strip():
-            # Character mode skips TTS but still needs a transcript file for the dashboard.
+            # No TTS client available in character mode — write transcript for dashboard only.
             transcript_dir = self.voice_manager.base_dir / "default"
             transcript_dir.mkdir(parents=True, exist_ok=True)
             transcript_path = transcript_dir / "transcript.txt"
@@ -1989,7 +1988,7 @@ class PipelineOrchestrator:
                 alignment_path=alignment_path,
                 alignment_payload=bundle.narration_alignment_payload,
             )
-        elif not prompts_only and not bool(self.config.veo_character_images):
+        elif not prompts_only:
             logger.info("🎙️  Preparing narration audio")
             script_text = bundle.script.full_transcript
             voice_id = self.config.narration_voice_id or self.config.voice_id
