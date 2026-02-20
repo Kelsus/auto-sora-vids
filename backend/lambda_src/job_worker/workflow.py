@@ -509,12 +509,17 @@ class PipelineWorkflow:
 
         export_dir = run_dir / "exports"
         play_res = self._resolve_caption_play_res(context.pipeline_config)
+        is_character = bool(
+            (context.pipeline_config or {}).get("veo_character_id")
+            or (context.pipeline_config or {}).get("veo_character_images")
+        )
         captions_path = write_karaoke_ass(
             script=bundle.script,
-            alignment=bundle.narration_alignment_payload,
+            alignment=None if is_character else bundle.narration_alignment_payload,
             chunks=bundle.chunks,
             export_dir=export_dir,
             play_res=play_res,
+            beat_duration=8.0 if is_character else None,
         )
 
         try:

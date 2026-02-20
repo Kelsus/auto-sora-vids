@@ -1058,6 +1058,7 @@ class PipelineOrchestrator:
             self.voice_manager.eleven_client
             and script_text.strip()
             and not dry_run
+            and not has_character
             and (not prompts_only or self.config.prepare_voice_during_prompts)
         )
 
@@ -1994,7 +1995,7 @@ class PipelineOrchestrator:
                 alignment_path=alignment_path,
                 alignment_payload=bundle.narration_alignment_payload,
             )
-        elif not prompts_only:
+        elif not prompts_only and not bool(self.config.veo_character_images):
             logger.info("🎙️  Preparing narration audio")
             script_text = bundle.script.full_transcript
             voice_id = self.config.narration_voice_id or self.config.voice_id
@@ -2130,10 +2131,11 @@ class PipelineOrchestrator:
                     stored = self._try_rel_path(asset_path, run_dirs["run_dir"]) or asset_path
                     media_assets.append(stored)
 
-        # Build captions: prefer ASS karaoke when alignment is present
+        # Build captions: ASS karaoke when alignment is present or character mode
         caption_segments: list[CaptionSegment] = []
         captions_ass_path: Path | None = None
-        if alignment_payload:
+        is_char = bool(self.config.veo_character_images)
+        if alignment_payload or is_char:
             try:
                 # Derive play resolution from Sora/Veo settings when possible
                 play_res = (720, 1280)
@@ -2145,10 +2147,11 @@ class PipelineOrchestrator:
                     pass
                 captions_ass_path = write_karaoke_ass(
                     script=bundle.script,
-                    alignment=alignment_payload,
+                    alignment=None if is_char else alignment_payload,
                     chunks=chunks_plan,
                     export_dir=run_dirs["export_dir"],
                     play_res=play_res,
+                    beat_duration=8.0 if is_char else None,
                 )
                 logger.info("Generated karaoke captions at %s", captions_ass_path)
             except Exception as exc:  # pragma: no cover - defensive path
