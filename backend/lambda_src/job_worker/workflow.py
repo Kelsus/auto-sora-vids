@@ -482,7 +482,11 @@ class PipelineWorkflow:
         run_dir = self._local_run_dir(context.job_id)
         absolute_final_video = self._resolve_final_video_path(run_dir, bundle.final_video)
         drive_folder = self._resolve_drive_folder(context.job_id, context.pipeline_config)
-        if not bundle.narration_alignment_payload:
+        is_character = bool(
+            (context.pipeline_config or {}).get("veo_character_id")
+            or (context.pipeline_config or {}).get("veo_character_images")
+        )
+        if not bundle.narration_alignment_payload and not is_character:
             logger.info("Skipping caption generation for job %s; no alignment payload", context.job_id)
             final_video_key = self._publish_run_outputs(
                 job_id=context.job_id,
@@ -509,10 +513,6 @@ class PipelineWorkflow:
 
         export_dir = run_dir / "exports"
         play_res = self._resolve_caption_play_res(context.pipeline_config)
-        is_character = bool(
-            (context.pipeline_config or {}).get("veo_character_id")
-            or (context.pipeline_config or {}).get("veo_character_images")
-        )
         captions_path = write_karaoke_ass(
             script=bundle.script,
             alignment=None if is_character else bundle.narration_alignment_payload,
