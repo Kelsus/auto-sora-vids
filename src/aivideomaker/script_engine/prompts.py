@@ -177,8 +177,14 @@ CHARACTER_VISUAL_BLOCK = dedent(
     smiling when the content is genuinely positive or lighthearted.
     Vary the presenter's framing (medium shot, close-up, walking, gesturing, interacting
     with objects) while always keeping them as the focal subject of the shot.
-    If a beat includes a chart or graph overlay, the chart must appear beside or below
-    the presenter—never covering their face or upper body.
+
+    No charts or graphs (strict):
+    NEVER include charts, graphs, data visualizations, bar charts, line charts, or any
+    on-screen data overlays in the visual_seed. The video model cannot render meaningful
+    charts—it produces random, illegible graphics that hurt the video quality. Instead,
+    convey data through the presenter's speech and body language: holding up a tablet,
+    pointing at a screen, gesturing to emphasize scale, etc. The data lives in the
+    narration, not in a visual chart.
 
     Beat length (hard limit — count every word):
     Each beat is exactly 8 seconds of video. The AI voice speaks at ~2 words/second,
