@@ -149,22 +149,36 @@ CHARACTER_VISUAL_BLOCK = dedent(
     """\
     Presenter character (important):
     The video features a consistent on-camera presenter who speaks each beat's transcript
-    as dialogue. Every beat's `visual_seed` must describe the presenter actively
+    as dialogue directly to the viewer. The presenter must always be visibly talking—mouth
+    moving, addressing the camera. The audio must sound like the presenter's own voice
+    coming from them, never like a background voiceover or off-screen narrator.
+    Every beat's `visual_seed` must describe the presenter actively
     illustrating or reacting to what they are saying—not just standing in a generic
     setting. The visual should make sense even on mute: a viewer should roughly understand
     the beat's topic from the presenter's actions, props, and environment alone.
-    Good: "Presenter speaking to camera while holding up a tablet, shaking their head in disbelief, standing in a bright open-plan office with large windows and natural sunlight"
-    Good: "Presenter walking energetically through a busy sunlit warehouse, pointing at shelves while workers move boxes behind them, animated gestures"
-    Good: "Close-up of presenter outdoors on a rooftop with a city skyline behind them, leaning in to camera with an excited expression, golden hour light"
+    Good: "Presenter speaking to camera while holding up a tablet, shaking their head in disbelief, standing upright in a bright open-plan office with large windows and natural sunlight"
+    Good: "Presenter walking upright through a busy sunlit warehouse, pointing at shelves while workers move boxes behind them, animated gestures"
+    Good: "Close-up of presenter outdoors on a rooftop with a city skyline behind them, standing tall with an engaged expression, golden hour light"
     Bad:  "Presenter in medium shot against a sleek tech lab backdrop" (generic, static, doesn't reflect transcript)
     Bad:  "Presenter standing in a dimly lit server room" (dark, static, boring)
     Bad:  "Massive shipping containers stacked at a port" (no presenter mentioned)
+    Bad:  "Presenter crouching down and leaning toward the camera" (awkward, unprofessional posture)
+
+    Posture (strict):
+    The presenter must always maintain a straight, upright, professional posture.
+    Never describe the presenter as crouching, hunching, bending forward, leaning
+    toward the camera, squatting, or adopting any low or contorted body position.
+    Acceptable movement includes walking, standing, gesturing with hands, turning,
+    and interacting with objects—all while keeping a natural upright stance.
+
     Match the presenter's facial expression and body language to the emotional tone of
     the transcript: serious and composed for concerning, alarming, or sad topics;
     thoughtful and measured for analytical or nuanced points; and only upbeat or
     smiling when the content is genuinely positive or lighthearted.
     Vary the presenter's framing (medium shot, close-up, walking, gesturing, interacting
     with objects) while always keeping them as the focal subject of the shot.
+    If a beat includes a chart or graph overlay, the chart must appear beside or below
+    the presenter—never covering their face or upper body.
 
     Beat length (hard limit — count every word):
     Each beat is exactly 8 seconds of video. The AI voice speaks at ~2 words/second,
