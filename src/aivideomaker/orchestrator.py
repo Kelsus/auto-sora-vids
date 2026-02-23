@@ -333,7 +333,7 @@ class PipelineOrchestrator:
         if bool(config.veo_character_images):
             length_profile = adapt_profile_for_character(length_profile)
         style_directive = config.resolve_style_directive()
-        suppress_charts = bool(config.input_images)
+        suppress_charts = bool(config.input_images) or bool(config.veo_character_images)
 
         provider = config.media_provider.lower()
         if provider == "sora":
@@ -429,7 +429,7 @@ class PipelineOrchestrator:
             else None
         )
         if suppress_charts:
-            logger.info("🛑  User images provided; suppressing automatic chart planning/rendering.")
+            logger.info("🛑  Suppressing automatic chart planning/rendering (input_images or character mode active).")
             chart_planner = None
             chart_assigner = None
             chart_renderer = None
@@ -905,7 +905,7 @@ class PipelineOrchestrator:
         external_review: ScriptReviewDecision | None = None,
         article_override: Mapping[str, Any] | None = None,
     ) -> PipelineBundle:
-        charts_allowed = not bool(self.config.input_images)
+        charts_allowed = not bool(self.config.input_images) and not bool(self.config.veo_character_images)
         logger.info("📰  Ingesting article: %s", article_url)
         if article_override:
             article = self._bundle_from_override(article_url, article_override)

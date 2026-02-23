@@ -156,13 +156,20 @@ CHARACTER_VISUAL_BLOCK = dedent(
     illustrating or reacting to what they are saying—not just standing in a generic
     setting. The visual should make sense even on mute: a viewer should roughly understand
     the beat's topic from the presenter's actions, props, and environment alone.
-    Good: "Presenter speaking to camera while holding up a tablet, shaking their head in disbelief, standing upright in a bright open-plan office with large windows and natural sunlight"
-    Good: "Presenter walking upright through a busy sunlit warehouse, pointing at shelves while workers move boxes behind them, animated gestures"
-    Good: "Close-up of presenter outdoors on a rooftop with a city skyline behind them, standing tall with an engaged expression, golden hour light"
-    Bad:  "Presenter in medium shot against a sleek tech lab backdrop" (generic, static, doesn't reflect transcript)
-    Bad:  "Presenter standing in a dimly lit server room" (dark, static, boring)
-    Bad:  "Massive shipping containers stacked at a port" (no presenter mentioned)
-    Bad:  "Presenter crouching down and leaning toward the camera" (awkward, unprofessional posture)
+    Each visual_seed must be unique and tailored to its beat's transcript—NEVER reuse
+    or recycle the same setting, framing, or description across beats. Invent a fresh
+    location, action, and camera angle every time. Do NOT copy the examples below;
+    they only illustrate the level of specificity and action expected:
+    - Specific + active: describe a concrete action tied to the beat's topic, a distinct
+      well-lit environment, and the presenter's posture/expression in one sentence.
+    - Varied: every beat should feel like a different scene—different location, different
+      framing (medium, close-up, wide), different props or interactions.
+    - Bad: generic backdrops with no action ("presenter in a sleek tech lab"), static
+      poses, dark/dim settings, no presenter in frame, or awkward postures (crouching,
+      leaning toward camera).
+    - Banned clichés (never use these): rooftop with city skyline, golden hour lighting,
+      floor-to-ceiling windows overlooking a city, standing at a window gazing out.
+      These are overused defaults—pick locations that relate to the beat's actual topic.
 
     Posture (strict):
     The presenter must always maintain a straight, upright, professional posture.
@@ -177,8 +184,14 @@ CHARACTER_VISUAL_BLOCK = dedent(
     smiling when the content is genuinely positive or lighthearted.
     Vary the presenter's framing (medium shot, close-up, walking, gesturing, interacting
     with objects) while always keeping them as the focal subject of the shot.
-    If a beat includes a chart or graph overlay, the chart must appear beside or below
-    the presenter—never covering their face or upper body.
+
+    No charts or graphs (strict):
+    NEVER include charts, graphs, data visualizations, bar charts, line charts, or any
+    on-screen data overlays in the visual_seed. The video model cannot render meaningful
+    charts—it produces random, illegible graphics that hurt the video quality. Instead,
+    convey data through the presenter's speech and body language: holding up a tablet,
+    pointing at a screen, gesturing to emphasize scale, etc. The data lives in the
+    narration, not in a visual chart.
 
     Beat length (hard limit — count every word):
     Each beat is exactly 8 seconds of video. The AI voice speaks at ~2 words/second,
