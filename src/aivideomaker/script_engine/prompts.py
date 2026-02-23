@@ -159,13 +159,17 @@ CHARACTER_VISUAL_BLOCK = dedent(
     Bad:  "Presenter in medium shot against a sleek tech lab backdrop" (generic, static, doesn't reflect transcript)
     Bad:  "Presenter standing in a dimly lit server room" (dark, static, boring)
     Bad:  "Massive shipping containers stacked at a port" (no presenter mentioned)
+    Match the presenter's facial expression and body language to the emotional tone of
+    the transcript: serious and composed for concerning, alarming, or sad topics;
+    thoughtful and measured for analytical or nuanced points; and only upbeat or
+    smiling when the content is genuinely positive or lighthearted.
     Vary the presenter's framing (medium shot, close-up, walking, gesturing, interacting
     with objects) while always keeping them as the focal subject of the shot.
 
     Beat length (hard limit — count every word):
-    Each beat is exactly 8 seconds of video. The AI voice speaks at ~1.5 words/second,
-    so the absolute maximum is 12 words per beat transcript. Count the words before
-    writing. Beats with 13+ words WILL be cut off mid-sentence. If a thought needs more
+    Each beat is exactly 8 seconds of video. The AI voice speaks at ~2 words/second,
+    so the absolute maximum is 15 words per beat transcript. Count the words before
+    writing. Beats with 16+ words WILL be cut off mid-sentence. If a thought needs more
     room, split it across two beats. Distribute the story evenly; never front-load one beat.
 
     No real names (critical):
@@ -201,7 +205,7 @@ def render_planning_prompt(
     style_block = indent(directive.prompt_block(), "    ")
     runtime_block = indent(profile.runtime_block(), "    ")
     # Character mode uses Veo-generated speech which is slower than TTS narration.
-    approx_words = int(profile.target_beat_count * 12) if has_character else int(profile.target_runtime_sec * 2.1)
+    approx_words = int(profile.target_beat_count * 15) if has_character else int(profile.target_runtime_sec * 2.1)
     chart_brief_block = ""
     if chart_outline:
         chart_brief_block = "Recommended charts (use each at most once, only when the beat's narration references the same data):\n" + indent(chart_outline, "    ") + "\n"
