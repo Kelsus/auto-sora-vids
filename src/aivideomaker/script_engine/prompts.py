@@ -167,6 +167,9 @@ CHARACTER_VISUAL_BLOCK = dedent(
     - Bad: generic backdrops with no action ("presenter in a sleek tech lab"), static
       poses, dark/dim settings, no presenter in frame, or awkward postures (crouching,
       leaning toward camera).
+    - Banned clichés (never use these): rooftop with city skyline, golden hour lighting,
+      floor-to-ceiling windows overlooking a city, standing at a window gazing out.
+      These are overused defaults—pick locations that relate to the beat's actual topic.
 
     Posture (strict):
     The presenter must always maintain a straight, upright, professional posture.
