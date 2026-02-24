@@ -280,6 +280,7 @@ class PipelineBundle(BaseModel):
         default_factory=dict,
         description="Mapping of beat ids to user image ids",
     )
+    thumbnail_path: Optional[Path] = None
 
 
 class PromptGenerationResult(BaseModel):

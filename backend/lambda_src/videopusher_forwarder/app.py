@@ -96,6 +96,14 @@ class VideoPusherForwarder:
         dest_video_key = f"raw/{upload_id}{video_ext}"
         self._copy_to_videopusher(bucket, video_key, dest_video_key, "video/mp4")
 
+        # Copy thumbnail to VideoPusher bucket if available
+        thumbnail_key = self._find_thumbnail_key(bucket, video_key)
+        dest_cover_key: Optional[str] = None
+        if thumbnail_key:
+            dest_cover_key = f"covers/{upload_id}.png"
+            self._copy_to_videopusher(bucket, thumbnail_key, dest_cover_key, "image/png")
+            logger.info("Copied thumbnail %s to %s", thumbnail_key, dest_cover_key)
+
         # Copy or create metadata in VideoPusher bucket
         dest_manifest_key = f"manifests/{upload_id}.json"
         manifest_bytes = json.dumps(raw_metadata).encode("utf-8")
@@ -106,7 +114,7 @@ class VideoPusherForwarder:
 
         # Create DynamoDB record
         now = datetime.now(timezone.utc).isoformat()
-        item = {
+        item: Dict[str, Any] = {
             "pk": f"UPLOAD#{upload_id}",
             "sk": f"UPLOAD#{upload_id}",
             "uploadId": upload_id,
@@ -122,6 +130,8 @@ class VideoPusherForwarder:
             "sourceJobId": job_id,
             "sourceS3Key": video_key,
         }
+        if dest_cover_key:
+            item["s3CoverImageKey"] = dest_cover_key
 
         self._table.put_item(Item=item)
         logger.info("Created upload record %s in VideoPusher", upload_id)
@@ -140,6 +150,16 @@ class VideoPusherForwarder:
         if len(parts) >= 3 and parts[0] == "jobs" and parts[1] == "final":
             return parts[2]
         return "unknown"
+
+    def _find_thumbnail_key(self, bucket: str, video_key: str) -> Optional[str]:
+        """Find thumbnail.png in the same S3 directory as the video."""
+        prefix = "/".join(video_key.split("/")[:-1]) + "/"
+        thumbnail_key = f"{prefix}thumbnail.png"
+        try:
+            self._s3.head_object(Bucket=bucket, Key=thumbnail_key)
+            return thumbnail_key
+        except Exception:
+            return None
 
     def _find_metadata_key(self, bucket: str, video_key: str) -> Optional[str]:
         """Find the corresponding .json metadata file for a video."""

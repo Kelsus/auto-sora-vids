@@ -119,6 +119,17 @@ class PipelineWorkflow:
 
         self._write_bundle(run_dir, bundle)
         self._bundle_store.save(bundle_key, bundle)
+
+        is_character = bool(
+            pipeline_overrides.get("veo_character_id")
+            or pipeline_overrides.get("veo_character_images")
+        )
+        if is_character and not resume_key:
+            try:
+                self._generate_thumbnail(run_dir, bundle, pipeline_overrides)
+            except Exception:
+                logger.warning("Thumbnail generation failed for job %s", metadata.job_id, exc_info=True)
+
         self._storage.upload_directory(run_dir, output_prefix)
 
         pause_for_review = self._should_pause_for_review(pipeline_overrides)
@@ -534,6 +545,11 @@ class PipelineWorkflow:
         if absolute_final_video:
             self._burn_captions_into_video(absolute_final_video, captions_path, export_dir)
 
+        if is_character:
+            thumb_src = run_dir / "thumbnail.png"
+            if thumb_src.exists():
+                shutil.copy2(thumb_src, export_dir / "thumbnail.png")
+
         final_video_key = self._publish_run_outputs(
             job_id=context.job_id,
             run_dir=run_dir,
@@ -726,6 +742,10 @@ class PipelineWorkflow:
             "has_alignment_payload": bool(bundle.narration_alignment_payload),
         }
 
+        thumbnail_path = self._asset_s3_uri(
+            Path("thumbnail.png"), output_prefix, job_id, bundle.article.slug, bucket,
+        )
+
         return {
             "bundle_key": bundle_key,
             "output_prefix": output_prefix,
@@ -742,6 +762,7 @@ class PipelineWorkflow:
                 "beats": beats,
             },
             "narration": narration,
+            "thumbnail_path": thumbnail_path,
         }
 
     def _asset_s3_uri(
@@ -1081,6 +1102,36 @@ class PipelineWorkflow:
             final_video_key = destination_key
 
         return final_video_key
+
+    def _generate_thumbnail(
+        self,
+        run_dir: Path,
+        bundle: PipelineBundle,
+        pipeline_config: Optional[Dict[str, Any]],
+    ) -> None:
+        from aivideomaker.thumbnail import ThumbnailGenerator
+        from aivideomaker.media_pipeline.gemini_image_client import GeminiImageClient
+
+        runner = self._get_runner(pipeline_config)
+        orchestrator = runner._ensure_orchestrator()
+        config = orchestrator.config
+
+        gemini_client = GeminiImageClient(
+            model=config.gemini_image_model,
+            use_vertex=config.gemini_use_vertex,
+            project=config.gemini_project or config.veo_project,
+            location=config.gemini_location,
+            credentials_path=config.gemini_credentials_path or config.veo_credentials_path,
+        )
+
+        character_image_paths = [Path(p) for p in (config.veo_character_images or [])]
+        generator = ThumbnailGenerator(
+            llm=orchestrator.llm,
+            gemini_client=gemini_client,
+            character_image_paths=character_image_paths,
+        )
+        thumb_path = generator.generate(run_dir, bundle.script)
+        logger.info("Generated thumbnail at %s", thumb_path)
 
     def _burn_captions_into_video(self, video_path: Path, captions_path: Path, export_dir: Path) -> None:
         temp_output = video_path.with_suffix(".captions.mp4")
