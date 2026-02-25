@@ -37,10 +37,31 @@ _TITLE_USER_PROMPT = (
     "- Output ONLY the title, nothing else"
 )
 
+_EMOTION_SYSTEM_PROMPT = (
+    "You are an expert at reading the emotional tone of news stories and translating "
+    "that into vivid facial expression directions for thumbnail photography. "
+    "Output ONLY a short description of the facial expression — no explanation."
+)
+
+_EMOTION_USER_PROMPT = (
+    "Based on this video premise, describe the ideal facial expression for a "
+    "social media thumbnail character. The expression should match the emotional "
+    "tone of the story but be EXAGGERATED for maximum impact and curiosity on "
+    "social media (think YouTube thumbnails).\n\n"
+    "Premise: {premise}\n\n"
+    "Rules:\n"
+    "- 5-20 words describing ONLY the facial expression\n"
+    "- Match the story's emotion: shock, anger, grief, fear, disgust, worry, etc.\n"
+    "- Exaggerate the expression — dramatic, intense, attention-grabbing\n"
+    "- NEVER use smiling or happy expressions for serious/tragic/dark topics\n"
+    "- Output ONLY the expression description, nothing else"
+)
+
 _SCENE_PROMPT = (
     "Generate a 9:16 portrait thumbnail image featuring this character. "
-    "The character should be prominently visible, looking engaging and expressive. "
-    "Scene: {premise}. "
+    "The character should be prominently visible. "
+    "Facial expression: {expression}. "
+    "Scene context: {premise}. "
     "Eye-catching, suitable for social media. No text overlays."
 )
 
@@ -91,12 +112,31 @@ class ThumbnailGenerator:
         truncated = premise[:40].rsplit(" ", 1)[0]
         return truncated.upper()
 
+    def _generate_expression(self, script: ScriptPlan) -> str:
+        if self._llm is not None:
+            try:
+                result = self._llm.complete(
+                    _EMOTION_USER_PROMPT.format(premise=script.premise),
+                    system=_EMOTION_SYSTEM_PROMPT,
+                    max_tokens=60,
+                    temperature=0.7,
+                )
+                expression = result.strip().strip('"').strip("'")
+                if expression:
+                    logger.info("Thumbnail expression: %s", expression)
+                    return expression
+            except Exception:
+                logger.warning("LLM expression generation failed, using fallback", exc_info=True)
+        return "intense, dramatic expression matching the story's emotional tone"
+
     def _generate_character_scene(self, script: ScriptPlan) -> Image.Image:
         from google.genai import types
         from aivideomaker.media_pipeline.gemini_image_client import GeminiImageError
 
         if not self._gemini_client:
             raise GeminiImageError("Gemini client is required for thumbnail generation")
+
+        expression = self._generate_expression(script)
 
         parts: list[object] = []
         for img_path in self._character_image_paths:
@@ -106,7 +146,7 @@ class ThumbnailGenerator:
                     mime_type="image/png",
                 ))
         parts.append(types.Part.from_text(
-            text=_SCENE_PROMPT.format(premise=script.premise),
+            text=_SCENE_PROMPT.format(expression=expression, premise=script.premise),
         ))
 
         config = types.GenerateContentConfig(
