@@ -185,13 +185,17 @@ CHARACTER_VISUAL_BLOCK = dedent(
     Vary the presenter's framing (medium shot, close-up, walking, gesturing, interacting
     with objects) while always keeping them as the focal subject of the shot.
 
-    No charts or graphs (strict):
-    NEVER include charts, graphs, data visualizations, bar charts, line charts, or any
-    on-screen data overlays in the visual_seed. The video model cannot render meaningful
-    charts—it produces random, illegible graphics that hurt the video quality. Instead,
-    convey data through the presenter's speech and body language: holding up a tablet,
-    pointing at a screen, gesturing to emphasize scale, etc. The data lives in the
-    narration, not in a visual chart.
+    No charts, graphs, or floating graphics (strict):
+    NEVER include any of the following in the visual_seed: charts, graphs, data
+    visualizations, bar charts, line charts, holograms, holographic displays, floating
+    graphics, floating data, glowing interfaces, transparent screens, futuristic HUDs,
+    digital overlays, or any on-screen data overlays. The video model cannot render
+    meaningful data visuals—it produces random, illegible, invented graphics that hurt
+    the video quality. Instead, convey data through the presenter's speech and body
+    language: holding up a physical document, gesturing to emphasize scale, etc.
+    The data lives in the narration, not in any visual element.
+    Also avoid describing screens, monitors, or tablets that show specific content—
+    the video model will fill them with random invented graphics.
 
     Beat length (hard limit — count every word):
     Each beat is exactly 8 seconds of video. The AI voice speaks at ~2 words/second,

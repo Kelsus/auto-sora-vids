@@ -201,7 +201,7 @@ class PipelineConfig(BaseModel):
     veo_presenter_description: Optional[str] = None
     veo_character_prompt_prefix: Optional[str] = None
     # Gemini Image configuration (for chart composition)
-    gemini_image_model: str = "gemini-2.0-flash-exp"
+    gemini_image_model: str = "gemini-2.0-flash"
     gemini_use_vertex: bool = True
     gemini_project: Optional[str] = None
     gemini_location: str = "us-central1"
@@ -280,6 +280,7 @@ class PipelineBundle(BaseModel):
         default_factory=dict,
         description="Mapping of beat ids to user image ids",
     )
+    thumbnail_path: Optional[Path] = None
 
 
 class PromptGenerationResult(BaseModel):
