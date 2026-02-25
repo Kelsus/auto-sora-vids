@@ -136,23 +136,28 @@ class ThumbnailGenerator:
         expression = self._generate_expression(script)
         prompt = _SCENE_PROMPT.format(expression=expression, premise=script.premise)
 
-        # Collect reference images for gpt-image-1
+        # Use images.edit when character references exist, images.generate otherwise
         image_inputs: list[object] = []
         for img_path in self._character_image_paths:
             if img_path.exists():
                 image_inputs.append(open(img_path, "rb"))  # noqa: SIM115
 
         try:
-            kwargs: dict = dict(
-                model="gpt-image-1",
-                prompt=prompt,
-                size="1024x1536",
-                n=1,
-            )
             if image_inputs:
-                kwargs["image"] = image_inputs
-
-            response = self._openai_client.images.generate(**kwargs)
+                response = self._openai_client.images.edit(
+                    model="gpt-image-1",
+                    image=image_inputs,
+                    prompt=prompt,
+                    size="1024x1536",
+                    n=1,
+                )
+            else:
+                response = self._openai_client.images.generate(
+                    model="gpt-image-1",
+                    prompt=prompt,
+                    size="1024x1536",
+                    n=1,
+                )
         finally:
             for f in image_inputs:
                 f.close()
