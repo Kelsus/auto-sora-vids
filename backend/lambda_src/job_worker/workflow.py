@@ -1109,25 +1109,19 @@ class PipelineWorkflow:
         bundle: PipelineBundle,
         pipeline_config: Optional[Dict[str, Any]],
     ) -> None:
+        from openai import OpenAI
         from aivideomaker.thumbnail import ThumbnailGenerator
-        from aivideomaker.media_pipeline.gemini_image_client import GeminiImageClient
 
         runner = self._get_runner(pipeline_config)
         orchestrator = runner._ensure_orchestrator()
         config = orchestrator.config
 
-        gemini_client = GeminiImageClient(
-            model=config.gemini_image_model,
-            use_vertex=config.gemini_use_vertex,
-            project=config.gemini_project or config.veo_project,
-            location=config.gemini_location,
-            credentials_path=config.gemini_credentials_path or config.veo_credentials_path,
-        )
+        openai_client = OpenAI()
 
         character_image_paths = [Path(p) for p in (config.veo_character_images or [])]
         generator = ThumbnailGenerator(
             llm=orchestrator.llm,
-            gemini_client=gemini_client,
+            openai_client=openai_client,
             character_image_paths=character_image_paths,
         )
         thumb_path = generator.generate(run_dir, bundle.script)

@@ -4,7 +4,6 @@ import base64
 import io
 import logging
 import textwrap
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -68,16 +67,16 @@ _SCENE_PROMPT = (
 
 
 class ThumbnailGenerator:
-    """Generates eye-catching thumbnails using Gemini character image generation with text overlay."""
+    """Generates eye-catching thumbnails using OpenAI gpt-image-1 with text overlay."""
 
     def __init__(
         self,
         llm: Optional[LLMClient] = None,
-        gemini_client: Optional[object] = None,
+        openai_client: Optional[object] = None,
         character_image_paths: Optional[list[Path]] = None,
     ) -> None:
         self._llm = llm
-        self._gemini_client = gemini_client
+        self._openai_client = openai_client
         self._character_image_paths = character_image_paths or []
 
     def generate(self, export_dir: Path, script: ScriptPlan) -> Path:
@@ -131,79 +130,44 @@ class ThumbnailGenerator:
         return "intense, dramatic expression matching the story's emotional tone"
 
     def _generate_character_scene(self, script: ScriptPlan) -> Image.Image:
-        from google.genai import types
-        from aivideomaker.media_pipeline.gemini_image_client import GeminiImageError
-
-        if not self._gemini_client:
-            raise GeminiImageError("Gemini client is required for thumbnail generation")
+        if not self._openai_client:
+            raise RuntimeError("OpenAI client is required for thumbnail generation")
 
         expression = self._generate_expression(script)
+        prompt = _SCENE_PROMPT.format(expression=expression, premise=script.premise)
 
-        parts: list[object] = []
+        # Collect reference images for gpt-image-1
+        image_inputs: list[object] = []
         for img_path in self._character_image_paths:
             if img_path.exists():
-                parts.append(types.Part.from_bytes(
-                    data=img_path.read_bytes(),
-                    mime_type="image/png",
-                ))
-        parts.append(types.Part.from_text(
-            text=_SCENE_PROMPT.format(expression=expression, premise=script.premise),
-        ))
+                image_inputs.append(open(img_path, "rb"))  # noqa: SIM115
 
-        config = types.GenerateContentConfig(
-            temperature=0.7,
-            top_p=0.9,
-            response_modalities=["IMAGE"],
-        )
-        contents = [types.Content(role="user", parts=parts)]
+        try:
+            kwargs: dict = dict(
+                model="gpt-image-1",
+                prompt=prompt,
+                size="1024x1536",
+                n=1,
+            )
+            if image_inputs:
+                kwargs["image"] = image_inputs
 
-        response = self._gemini_generate_with_retry(contents, config)
+            response = self._openai_client.images.generate(**kwargs)
+        finally:
+            for f in image_inputs:
+                f.close()
 
-        if not response.candidates:
-            raise GeminiImageError("No candidates returned from Gemini")
-
-        candidate = response.candidates[0]
-        if not candidate.content or not candidate.content.parts:
-            raise GeminiImageError("No content parts in response")
-
-        image_part = None
-        for part in candidate.content.parts:
-            if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                image_part = part
-                break
-
-        if not image_part or not image_part.inline_data:
-            raise GeminiImageError("No image data in response")
-
-        inline_data = image_part.inline_data.data
-        if isinstance(inline_data, str):
-            image_bytes = base64.b64decode(inline_data)
+        image_data = response.data[0]
+        if image_data.b64_json:
+            image_bytes = base64.b64decode(image_data.b64_json)
+        elif image_data.url:
+            import urllib.request
+            with urllib.request.urlopen(image_data.url) as resp:
+                image_bytes = resp.read()
         else:
-            image_bytes = inline_data
+            raise RuntimeError("No image data in OpenAI response")
 
         return Image.open(io.BytesIO(image_bytes))
-
-    def _gemini_generate_with_retry(
-        self, contents: list, config: object, retries: int = 3, backoff: float = 10.0,
-    ) -> object:
-        for attempt in range(1, retries + 1):
-            try:
-                return self._gemini_client.client.models.generate_content(
-                    model=self._gemini_client.model,
-                    contents=contents,
-                    config=config,
-                )
-            except Exception as exc:
-                is_rate_limit = "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)
-                if is_rate_limit and attempt < retries:
-                    wait = backoff * attempt
-                    logger.warning(
-                        "Gemini rate limited; retrying in %ss (attempt %s/%s)",
-                        wait, attempt, retries,
-                    )
-                    time.sleep(wait)
-                else:
-                    raise
 
     def _compose_thumbnail(self, frame: Image.Image, title: str) -> Image.Image:
         # Resize to cover target dimensions, then center-crop to avoid stretching
