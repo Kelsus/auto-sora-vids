@@ -499,7 +499,7 @@ class PipelineWorkflow:
         )
         if not bundle.narration_alignment_payload and not is_character:
             logger.info("Skipping caption generation for job %s; no alignment payload", context.job_id)
-            final_video_key = self._publish_run_outputs(
+            publish_result = self._publish_run_outputs(
                 job_id=context.job_id,
                 run_dir=run_dir,
                 prefix=context.output_prefix,
@@ -514,8 +514,10 @@ class PipelineWorkflow:
                 "error_message": None,
                 "current_execution_arn": None,
             }
-            if final_video_key:
-                attributes["final_video_key"] = final_video_key
+            if publish_result["final_video_key"]:
+                attributes["final_video_key"] = publish_result["final_video_key"]
+            if publish_result["thumbnail_key"]:
+                attributes["thumbnail_key"] = publish_result["thumbnail_key"]
             self._repository.update_status(
                 context.job_id,
                 JobStatusUpdate(status="COMPLETED", attributes=attributes),
@@ -550,7 +552,7 @@ class PipelineWorkflow:
             if thumb_src.exists():
                 shutil.copy2(thumb_src, export_dir / "thumbnail.png")
 
-        final_video_key = self._publish_run_outputs(
+        publish_result = self._publish_run_outputs(
             job_id=context.job_id,
             run_dir=run_dir,
             prefix=context.output_prefix,
@@ -576,8 +578,10 @@ class PipelineWorkflow:
             "captions_ass_key": final_captions_key,
             "error_message": None,
         }
-        if final_video_key:
-            attributes["final_video_key"] = final_video_key
+        if publish_result["final_video_key"]:
+            attributes["final_video_key"] = publish_result["final_video_key"]
+        if publish_result["thumbnail_key"]:
+            attributes["thumbnail_key"] = publish_result["thumbnail_key"]
         attributes["current_execution_arn"] = None
         self._repository.update_status(
             context.job_id,
@@ -1043,10 +1047,10 @@ class PipelineWorkflow:
         final_video_path: Optional[Path],
         drive_folder: Optional[str],
         include_final: bool,
-    ) -> Optional[str]:
+    ) -> Dict[str, Optional[str]]:
         self._storage.upload_directory(run_dir, prefix)
         if not include_final:
-            return None
+            return {"final_video_key": None, "thumbnail_key": None}
         return self._copy_exports_to_final(
             job_id=job_id,
             run_dir=run_dir,
@@ -1060,7 +1064,7 @@ class PipelineWorkflow:
         run_dir: Path,
         final_video_path: Optional[Path],
         drive_folder: Optional[str],
-    ) -> Optional[str]:
+    ) -> Dict[str, Optional[str]]:
         exports_dir = run_dir / "exports"
         if not exports_dir.exists():
             if final_video_path:
@@ -1070,10 +1074,11 @@ class PipelineWorkflow:
                 content_type, _ = mimetypes.guess_type(final_video_path.name)
                 key = self._settings.final_video_key(job_id, final_video_path.name)
                 self._storage.upload_file(final_video_path, key, metadata=metadata, content_type=content_type)
-                return key
-            return None
+                return {"final_video_key": key, "thumbnail_key": None}
+            return {"final_video_key": None, "thumbnail_key": None}
 
         final_video_key: Optional[str] = None
+        thumbnail_key: Optional[str] = None
         metadata = {"job-id": job_id}
         if drive_folder:
             metadata["drive-folder"] = drive_folder
@@ -1088,6 +1093,8 @@ class PipelineWorkflow:
             self._storage.upload_file(path, destination_key, metadata=metadata, content_type=content_type)
             if resolved_final_video and path.resolve() == resolved_final_video:
                 final_video_key = destination_key
+            if path.name == "thumbnail.png":
+                thumbnail_key = destination_key
 
         if not final_video_key and final_video_path and final_video_path.exists():
             relative_name = final_video_path.name
@@ -1101,7 +1108,7 @@ class PipelineWorkflow:
             )
             final_video_key = destination_key
 
-        return final_video_key
+        return {"final_video_key": final_video_key, "thumbnail_key": thumbnail_key}
 
     def _generate_thumbnail(
         self,

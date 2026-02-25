@@ -73,6 +73,18 @@ class JobListApplication:
         return value
 
     def _attach_signed_urls(self, item: Dict[str, Any]) -> None:
+        bucket_hint = (
+            item.get("output_bucket")
+            or item.get("outputBucket")
+        )
+
+        # Sign thumbnail_key into a presigned URL
+        thumbnail_key = item.get("thumbnail_key")
+        if thumbnail_key and bucket_hint:
+            signed = self._sign_s3_key(bucket_hint, thumbnail_key)
+            if signed:
+                item["thumbnail_url"] = signed
+
         review_metadata = item.get("review_metadata") or {}
         if not isinstance(review_metadata, dict):
             return
@@ -81,12 +93,7 @@ class JobListApplication:
         if not isinstance(narration, dict):
             return
 
-        bucket_hint = (
-            item.get("output_bucket")
-            or item.get("outputBucket")
-            or review_metadata.get("output_bucket")
-            or review_metadata.get("outputBucket")
-        )
+        bucket_hint = bucket_hint or review_metadata.get("output_bucket") or review_metadata.get("outputBucket")
         prefix_hint = (
             item.get("output_prefix")
             or item.get("outputPrefix")
@@ -99,6 +106,17 @@ class JobListApplication:
             signed = self._sign_asset(raw, bucket_hint, prefix_hint)
             if signed:
                 narration[field] = signed
+
+    def _sign_s3_key(self, bucket: str, key: str) -> Optional[str]:
+        try:
+            return self._ensure_s3().generate_presigned_url(
+                "get_object",
+                Params={"Bucket": bucket, "Key": key},
+                ExpiresIn=900,
+            )
+        except Exception:
+            logger.exception("Failed to generate presigned URL for %s/%s", bucket, key)
+            return None
 
     def _sign_asset(
         self,
