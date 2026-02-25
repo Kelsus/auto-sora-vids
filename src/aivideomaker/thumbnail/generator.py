@@ -37,32 +37,57 @@ _TITLE_USER_PROMPT = (
     "- Output ONLY the title, nothing else"
 )
 
-_EMOTION_SYSTEM_PROMPT = (
-    "You are an expert at reading the emotional tone of news stories and translating "
-    "that into vivid facial expression directions for thumbnail photography. "
-    "Output ONLY a short description of the facial expression — no explanation."
+_THUMBNAIL_DIRECTION_SYSTEM_PROMPT = (
+    "You are a creative director for social media video thumbnails. You design "
+    "unique, eye-catching thumbnail concepts that vary in expression, outfit, props, "
+    "and composition. Output valid JSON only — no explanation, no markdown."
 )
 
-_EMOTION_USER_PROMPT = (
-    "Based on this video premise, describe the ideal facial expression for a "
-    "social media thumbnail character. The expression should match the emotional "
-    "tone of the story but be EXAGGERATED for maximum impact and curiosity on "
-    "social media (think YouTube thumbnails).\n\n"
+_THUMBNAIL_DIRECTION_USER_PROMPT = (
+    "Design a unique thumbnail concept for this video premise:\n\n"
     "Premise: {premise}\n\n"
-    "Rules:\n"
-    "- 5-20 words describing ONLY the facial expression\n"
-    "- Match the story's emotion: shock, anger, grief, fear, disgust, worry, etc.\n"
-    "- Exaggerate the expression — dramatic, intense, attention-grabbing\n"
-    "- NEVER use smiling or happy expressions for serious/tragic/dark topics\n"
-    "- Output ONLY the expression description, nothing else"
+    "Return a JSON object with these fields:\n"
+    '{{"expression": "...", "outfit_and_props": "...", "scene_and_framing": "..."}}\n\n'
+    "Rules for each field:\n\n"
+    "expression (5-15 words):\n"
+    "- Match the story's emotional tone but pick a SPECIFIC nuanced expression.\n"
+    "- Go beyond shock and horror. Use the full emotional spectrum: wry smirk, "
+    "skeptical raised eyebrow, deadpan stare, exasperated eye-roll, knowing side-eye, "
+    "nervous lip bite, sarcastic half-smile, quiet disappointment, steely determination, "
+    "amused disbelief, uneasy forced grin, contemplative frown, mischievous grin, etc.\n"
+    "- Irony works great: a calm sip of coffee while chaos unfolds, a thumbs-up with "
+    "a pained smile, an eye-roll at absurd news.\n"
+    "- Reserve wide-open mouth shock ONLY for genuinely jaw-dropping stories. Most "
+    "stories call for subtler, more relatable expressions.\n"
+    "- Happy/smiling is fine for positive stories.\n\n"
+    "outfit_and_props (10-25 words):\n"
+    "- Dress the character in whatever clothes best represent the story's topic — "
+    "anything goes as long as it's highly recognizable and on-theme.\n"
+    "- Examples: military fatigues and dog tags for defense, scrubs and stethoscope "
+    "for health, judge's robe and gavel for legal, police uniform for law enforcement, "
+    "chef's apron for food, lab coat and goggles for science, football jersey for "
+    "sports, hoodie and headphones for tech, high-vis vest for infrastructure, "
+    "political sash or flag pin for politics, hazmat suit for environmental crisis.\n"
+    "- Include 1-2 handheld props that reinforce the topic: weapon replica, medical "
+    "chart, legal document, protest sign, tool, product from the story, etc.\n"
+    "- Be specific to THIS story — generic or plain outfits are boring.\n\n"
+    "scene_and_framing (10-25 words):\n"
+    "- Describe a specific background and camera framing tied to the story's setting.\n"
+    "- Vary framing: close-up face, medium shot waist-up, over-the-shoulder, slight "
+    "low angle, Dutch angle, character off-center with relevant background in focus.\n"
+    "- Background should relate to the topic: newsroom, warehouse, lab, city street, "
+    "trading floor, kitchen, stadium, hospital corridor, server room, courtroom, etc.\n"
+    "- Include lighting mood: warm, cool, dramatic side-light, soft natural, neon-lit.\n"
+    "- NEVER use: rooftop skylines, golden hour, floor-to-ceiling windows.\n"
 )
 
 _SCENE_PROMPT = (
-    "Generate a 9:16 portrait thumbnail image featuring this character. "
-    "The character should be prominently visible. "
+    "Generate a 9:16 portrait thumbnail image. "
+    "The character should be prominently visible and the focal point. "
     "Facial expression: {expression}. "
-    "Scene context: {premise}. "
-    "Eye-catching, suitable for social media. No text overlays."
+    "Outfit and props: {outfit_and_props}. "
+    "Scene and framing: {scene_and_framing}. "
+    "Eye-catching, high contrast, suitable for social media. No text overlays."
 )
 
 
@@ -112,29 +137,46 @@ class ThumbnailGenerator:
         truncated = premise[:40].rsplit(" ", 1)[0]
         return truncated.upper()
 
-    def _generate_expression(self, script: ScriptPlan) -> str:
+    def _generate_thumbnail_direction(self, script: ScriptPlan) -> dict[str, str]:
+        fallback = {
+            "expression": "intense, dramatic expression matching the story's emotional tone",
+            "outfit_and_props": "professional attire appropriate to the topic",
+            "scene_and_framing": "medium shot, well-lit environment related to the story",
+        }
         if self._llm is not None:
             try:
+                import json as _json
+
                 result = self._llm.complete(
-                    _EMOTION_USER_PROMPT.format(premise=script.premise),
-                    system=_EMOTION_SYSTEM_PROMPT,
-                    max_tokens=60,
-                    temperature=0.7,
+                    _THUMBNAIL_DIRECTION_USER_PROMPT.format(premise=script.premise),
+                    system=_THUMBNAIL_DIRECTION_SYSTEM_PROMPT,
+                    max_tokens=200,
+                    temperature=0.9,
                 )
-                expression = result.strip().strip('"').strip("'")
-                if expression:
-                    logger.info("Thumbnail expression: %s", expression)
-                    return expression
+                cleaned = result.strip()
+                # Strip markdown fences if present
+                if cleaned.startswith("```"):
+                    cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                direction = _json.loads(cleaned)
+                for key in fallback:
+                    if not direction.get(key):
+                        direction[key] = fallback[key]
+                logger.info("Thumbnail direction: %s", direction)
+                return direction
             except Exception:
-                logger.warning("LLM expression generation failed, using fallback", exc_info=True)
-        return "intense, dramatic expression matching the story's emotional tone"
+                logger.warning("LLM thumbnail direction failed, using fallback", exc_info=True)
+        return fallback
 
     def _generate_character_scene(self, script: ScriptPlan) -> Image.Image:
         if not self._openai_client:
             raise RuntimeError("OpenAI client is required for thumbnail generation")
 
-        expression = self._generate_expression(script)
-        prompt = _SCENE_PROMPT.format(expression=expression, premise=script.premise)
+        direction = self._generate_thumbnail_direction(script)
+        prompt = _SCENE_PROMPT.format(
+            expression=direction["expression"],
+            outfit_and_props=direction["outfit_and_props"],
+            scene_and_framing=direction["scene_and_framing"],
+        )
 
         # Use images.edit when character references exist, images.generate otherwise
         image_inputs: list[object] = []
