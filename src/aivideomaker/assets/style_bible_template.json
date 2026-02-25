@@ -14,7 +14,15 @@
         "on_screen_text",
         "fake_numbers",
         "synthetic_UI",
-        "charts_in_sora"
+        "charts_in_sora",
+        "hologram",
+        "holographic_display",
+        "floating_graphics",
+        "floating_data",
+        "futuristic_HUD",
+        "digital_overlay",
+        "glowing_interface",
+        "transparent_screen"
       ]
     },
     "audio": {
