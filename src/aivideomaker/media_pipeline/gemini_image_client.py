@@ -23,7 +23,7 @@ class GeminiImageClient:
         self,
         output_dir: Path | None = None,
         api_key: str | None = None,
-        model: str = "gemini-2.0-flash-exp",
+        model: str = "gemini-2.0-flash",
         use_vertex: bool = True,
         project: str | None = None,
         location: str | None = None,

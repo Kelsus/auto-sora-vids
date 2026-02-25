@@ -4,6 +4,7 @@ import base64
 import io
 import logging
 import textwrap
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -156,11 +157,7 @@ class ThumbnailGenerator:
         )
         contents = [types.Content(role="user", parts=parts)]
 
-        response = self._gemini_client.client.models.generate_content(
-            model=self._gemini_client.model,
-            contents=contents,
-            config=config,
-        )
+        response = self._gemini_generate_with_retry(contents, config)
 
         if not response.candidates:
             raise GeminiImageError("No candidates returned from Gemini")
@@ -185,6 +182,28 @@ class ThumbnailGenerator:
             image_bytes = inline_data
 
         return Image.open(io.BytesIO(image_bytes))
+
+    def _gemini_generate_with_retry(
+        self, contents: list, config: object, retries: int = 3, backoff: float = 10.0,
+    ) -> object:
+        for attempt in range(1, retries + 1):
+            try:
+                return self._gemini_client.client.models.generate_content(
+                    model=self._gemini_client.model,
+                    contents=contents,
+                    config=config,
+                )
+            except Exception as exc:
+                is_rate_limit = "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)
+                if is_rate_limit and attempt < retries:
+                    wait = backoff * attempt
+                    logger.warning(
+                        "Gemini rate limited; retrying in %ss (attempt %s/%s)",
+                        wait, attempt, retries,
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
 
     def _compose_thumbnail(self, frame: Image.Image, title: str) -> Image.Image:
         # Resize to cover target dimensions, then center-crop to avoid stretching
