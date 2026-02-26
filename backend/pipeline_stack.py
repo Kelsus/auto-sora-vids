@@ -844,6 +844,8 @@ class VideoAutomationStack(Stack):
             timeout=Duration.hours(2),
         )
         job_update_lambda.add_environment("STATE_MACHINE_ARN", state_machine.state_machine_arn)
+        job_update_lambda.add_environment("WORKER_FUNCTION_NAME", worker_lambda.function_name)
+        worker_lambda.grant_invoke(job_update_lambda)
         state_machine.grant(
             job_update_lambda,
             "states:StopExecution",
