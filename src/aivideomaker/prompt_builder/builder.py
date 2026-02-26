@@ -236,10 +236,13 @@ class MediaPromptBuilder:
         self._extend_unique(elements, self.base_negations)
 
         if self.has_character:
-            # Character mode: keep negations minimal to reduce safety-filter surface area.
-            # Only user-configured and style-level negations apply above; skip the
-            # heavy documentary/QC/motion negation boilerplate.
-            pass
+            # Character mode: skip heavy documentary/motion negation boilerplate but
+            # still ban data visuals — Veo renders random illegible graphics otherwise.
+            self._extend_unique(elements, [
+                "charts", "graphs", "data visualizations", "bar charts", "line charts",
+                "digits", "numbers", "percentages", "statistics on screen",
+                "infographics", "pie charts", "tables",
+            ])
         else:
             visual_spec = beat.visual
             if visual_spec and visual_spec.negations:

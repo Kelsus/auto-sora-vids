@@ -9,6 +9,7 @@ from typing import Iterable, List, Tuple
 from moviepy.audio.fx import all as afx
 from moviepy.editor import (
     AudioFileClip,
+    ImageClip,
     VideoFileClip,
     concatenate_videoclips,
     CompositeAudioClip,
@@ -57,6 +58,7 @@ class Stitcher:
         level_audio: bool = True,
         output_basename: str = "final_video",
         keep_video_audio: bool = False,
+        thumbnail_path: Path | None = None,
     ) -> Path:
         self.export_dir.mkdir(parents=True, exist_ok=True)
         clips = [VideoFileClip(str(path)) for path in video_paths]
@@ -91,6 +93,13 @@ class Stitcher:
                 resized = clip.resize(newsize=target_size)
                 concat_clips.append(resized)
                 resized_wrappers.append(resized)
+
+        if thumbnail_path and thumbnail_path.exists():
+            thumb_clip = ImageClip(str(thumbnail_path), duration=0.04).resize(
+                newsize=target_size
+            )
+            concat_clips.insert(0, thumb_clip)
+            logger.info("Prepended thumbnail frame from %s", thumbnail_path)
 
         final = concatenate_videoclips(concat_clips, method="compose")
 
