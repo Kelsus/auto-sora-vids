@@ -243,7 +243,7 @@ class VeoClient:
             visual = self.CHARACTER_PROMPT_TEMPLATE.format(visual_prompt=prompt.visual_prompt)
             segments.append(visual)
             if self.voice_description:
-                segments.append(f"Voice style: {self.voice_description}")
+                segments.append(f"Voice style: {self.voice_description}. Must speak American English, not British English.")
             if prompt.transcript and prompt.transcript.strip():
                 segments.append(f"Scene dialogue: {prompt.transcript.strip()}")
             segments.append("No on-screen text, captions, or subtitles.")

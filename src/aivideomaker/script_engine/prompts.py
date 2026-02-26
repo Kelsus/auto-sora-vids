@@ -197,6 +197,11 @@ CHARACTER_VISUAL_BLOCK = dedent(
     Also avoid describing screens, monitors, or tablets that show specific content—
     the video model will fill them with random invented graphics.
 
+    Language (strict):
+    All transcript text must use American English spelling and phrasing—never British
+    English. For example: "color" not "colour", "analyze" not "analyse", "skeptical"
+    not "sceptical", "toward" not "towards", "gotten" not "got" (past participle).
+
     Beat length (hard limit — count every word):
     Each beat is exactly 8 seconds of video. The AI voice speaks at ~2 words/second,
     so the absolute maximum is 15 words per beat transcript. Count the words before
