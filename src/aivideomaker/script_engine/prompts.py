@@ -185,17 +185,24 @@ CHARACTER_VISUAL_BLOCK = dedent(
     Vary the presenter's framing (medium shot, close-up, walking, gesturing, interacting
     with objects) while always keeping them as the focal subject of the shot.
 
-    No charts, graphs, or floating graphics (strict):
-    NEVER include any of the following in the visual_seed: charts, graphs, data
-    visualizations, bar charts, line charts, holograms, holographic displays, floating
-    graphics, floating data, glowing interfaces, transparent screens, futuristic HUDs,
-    digital overlays, or any on-screen data overlays. The video model cannot render
-    meaningful data visuals—it produces random, illegible, invented graphics that hurt
-    the video quality. Instead, convey data through the presenter's speech and body
-    language: holding up a physical document, gesturing to emphasize scale, etc.
-    The data lives in the narration, not in any visual element.
-    Also avoid describing screens, monitors, or tablets that show specific content—
-    the video model will fill them with random invented graphics.
+    No data visuals of any kind (critical — this is the #1 quality killer):
+    The video model CANNOT render readable text, numbers, or data graphics. Any attempt
+    produces random gibberish that ruins the video. You MUST follow these rules:
+    - NEVER put charts, graphs, tables, infographics, bar charts, line charts, pie charts,
+      percentages, statistics, numbers, digits, or any data visualization in the visual_seed.
+    - NEVER describe screens, monitors, tablets, whiteboards, documents, or signs that
+      "show" or "display" specific data, numbers, or text — the model fills them with
+      random illegible garbage.
+    - NEVER use words like "showing", "displaying", "revealing", "presenting data",
+      "breaking down the numbers", or "illustrating statistics" in the visual_seed.
+    - When the transcript mentions numbers, percentages, or data: the visual_seed must
+      show the presenter in a relevant PHYSICAL setting doing a PHYSICAL action. The data
+      lives entirely in the spoken narration, never in anything visible on screen.
+    - Also banned: holograms, holographic displays, floating graphics, floating data,
+      glowing interfaces, transparent screens, futuristic HUDs, digital overlays.
+    Good visual_seed for a beat about "sales grew 40%": "Presenter walks through a busy
+    warehouse stacked with shipping boxes, gesturing at the activity around them."
+    Bad visual_seed: "Presenter stands beside a screen showing a 40% growth chart."
 
     Language (strict):
     All transcript text must use American English spelling and phrasing—never British
