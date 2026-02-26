@@ -2177,6 +2177,7 @@ class PipelineOrchestrator:
             # When stitch_only, don't burn captions - let the separate caption generation step handle it
             # This avoids needing system ffmpeg in Docker (uses imageio-ffmpeg bundled binary instead)
             stitch_captions_ass = None if stitch_only else captions_ass_path
+            thumb = run_dirs["run_dir"] / "thumbnail.png" if is_character_mode else None
             final_video = self.stitcher.stitch(
                 media_assets,
                 voice_track,
@@ -2185,6 +2186,7 @@ class PipelineOrchestrator:
                 captions_ass=stitch_captions_ass,
                 output_basename=bundle.article.slug,
                 keep_video_audio=is_character_mode,
+                thumbnail_path=thumb,
             )
         else:
             reason = "prompts-only mode" if prompts_only else "dry run or no assets"
