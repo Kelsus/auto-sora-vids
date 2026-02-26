@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -61,6 +62,11 @@ class JobUpdateApplication:
         self._execution_launcher: ExecutionLauncher | None = None
         if state_machine_arn:
             self._execution_launcher = ExecutionLauncher(state_machine_arn=state_machine_arn)
+        self._lambda_client: Any | None = None
+        worker_function_name = os.environ.get("WORKER_FUNCTION_NAME")
+        if worker_function_name:
+            self._lambda_client = boto3.client("lambda")
+        self._worker_function_name = worker_function_name
 
     def handle_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Job update event received")
@@ -79,10 +85,15 @@ class JobUpdateApplication:
         review_action = None
         review_notes = None
         script_override_text = None
+        regenerate_thumbnail = None
         if isinstance(payload_dict, dict):
             review_action = payload_dict.pop("review_action", None)
             review_notes = payload_dict.pop("review_notes", None)
             script_override_text = payload_dict.pop("script_text", None)
+            regenerate_thumbnail = payload_dict.pop("regenerate_thumbnail", None)
+
+        if regenerate_thumbnail:
+            return self._handle_regenerate_thumbnail(job_id)
 
         if script_override_text is not None:
             return self._handle_script_override(job_id, str(script_override_text))
@@ -366,6 +377,78 @@ class JobUpdateApplication:
             return server_error("Failed to launch render execution")
 
         return ok(normalized)
+
+    def _handle_regenerate_thumbnail(self, job_id: str) -> Dict[str, Any]:
+        if not self._worker_function_name or not self._lambda_client:
+            return server_error("Worker function not configured")
+
+        try:
+            raw_job = self._repository.get_job(job_id)
+        except RepositoryError:
+            logger.exception("Failed to load job metadata for %s", job_id)
+            return server_error("Failed to load job")
+
+        if raw_job is None:
+            return not_found(job_id)
+
+        job = normalize_dynamodb_value(raw_job)
+        status = str(job.get("status", "")).upper()
+        if status != "REVIEW":
+            return conflict(f"Job {job_id} must be in REVIEW state to regenerate thumbnail (status={status})")
+
+        if job.get("thumbnail_regenerating"):
+            return conflict("Thumbnail regeneration is already in progress")
+
+        metadata = job.get("metadata") or {}
+        pipeline_config = metadata.get("pipeline_config") or {}
+        review_metadata = job.get("review_metadata") or {}
+        bundle_key = (
+            review_metadata.get("bundle_key")
+            or job.get("bundle_key")
+            or metadata.get("bundle_key")
+        )
+        output_prefix = (
+            review_metadata.get("output_prefix")
+            or job.get("output_prefix")
+        )
+        article_url = job.get("url") or ""
+
+        if not bundle_key or not output_prefix:
+            return conflict("Job is missing bundle/output metadata required for thumbnail regeneration")
+
+        # Mark regeneration in progress before invoking worker
+        self._repository.update_status(
+            job_id, status, {"thumbnail_regenerating": True},
+        )
+
+        worker_payload = {
+            "action": "REGENERATE_THUMBNAIL",
+            "jobContext": {
+                "jobId": job_id,
+                "articleUrl": article_url,
+                "bundleKey": bundle_key,
+                "outputPrefix": output_prefix,
+                "clipIds": [],
+                "dryRun": False,
+                "pipelineConfig": pipeline_config,
+            },
+        }
+
+        try:
+            self._lambda_client.invoke(
+                FunctionName=self._worker_function_name,
+                InvocationType="Event",
+                Payload=json.dumps(worker_payload).encode("utf-8"),
+            )
+        except Exception:
+            logger.exception("Failed to invoke worker Lambda for thumbnail regeneration")
+            self._repository.update_status(
+                job_id, status, {"thumbnail_regenerating": None},
+            )
+            return server_error("Failed to invoke thumbnail regeneration")
+
+        job["thumbnail_regenerating"] = True
+        return ok(job)
 
     @staticmethod
     def _build_review_context(job: Dict[str, Any], review_metadata: Dict[str, Any]) -> Dict[str, Any]:

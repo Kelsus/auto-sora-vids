@@ -1110,6 +1110,53 @@ class PipelineWorkflow:
 
         return {"final_video_key": final_video_key, "thumbnail_key": thumbnail_key}
 
+    def regenerate_thumbnail(self, context: JobContext) -> Dict[str, Any]:
+        """Regenerate thumbnail for a REVIEW job and update artifacts."""
+        try:
+            self._refresh_local_run_dir(context.job_id, context.output_prefix)
+            bundle = self._bundle_store.load(context.bundle_key)
+            run_dir = self._local_run_dir(context.job_id)
+
+            self._generate_thumbnail(run_dir, bundle, context.pipeline_config)
+
+            thumb_src = run_dir / "thumbnail.png"
+            if not thumb_src.exists():
+                raise RuntimeError("Thumbnail generation did not produce thumbnail.png")
+
+            # Copy thumbnail into exports dir so final artifacts include it
+            exports_dir = run_dir / "exports"
+            exports_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(thumb_src, exports_dir / "thumbnail.png")
+
+            # Upload updated run dir to S3
+            self._storage.upload_directory(run_dir, context.output_prefix)
+
+            # Copy thumbnail to final artifacts
+            dest_key = self._settings.final_artifact_key(context.job_id, "thumbnail.png")
+            self._storage.upload_file(exports_dir / "thumbnail.png", dest_key, content_type="image/png")
+
+            # Update thumbnail_key and clear regenerating flag in DynamoDB
+            self._repository.update_status(
+                context.job_id,
+                JobStatusUpdate(
+                    status="REVIEW",
+                    attributes={"thumbnail_key": dest_key, "thumbnail_regenerating": None},
+                ),
+            )
+
+            logger.info("Regenerated thumbnail for job %s -> %s", context.job_id, dest_key)
+            return {"thumbnailKey": dest_key}
+        except Exception:
+            logger.exception("Failed to regenerate thumbnail for job %s", context.job_id)
+            try:
+                self._repository.update_status(
+                    context.job_id,
+                    JobStatusUpdate(status="REVIEW", attributes={"thumbnail_regenerating": None}),
+                )
+            except Exception:
+                logger.exception("Failed to clear thumbnail_regenerating flag for job %s", context.job_id)
+            raise
+
     def _generate_thumbnail(
         self,
         run_dir: Path,

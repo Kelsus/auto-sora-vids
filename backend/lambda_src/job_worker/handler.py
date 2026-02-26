@@ -68,6 +68,12 @@ def handler(event: Dict[str, Any], _context: Any) -> Dict[str, Any]:  # pragma: 
         result = workflow.mark_running(metadata, metadata_payload)
         return result
 
+    if action == "REGENERATE_THUMBNAIL":
+        job_context = JobContext.from_payload(event["jobContext"])
+        result = workflow.regenerate_thumbnail(job_context)
+        result["jobId"] = job_context.job_id
+        return result
+
     if action == "MARK_FAILED":
         state_payload: Dict[str, Any] = {}
         if isinstance(event.get("state"), dict):

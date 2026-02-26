@@ -252,9 +252,9 @@ class ThumbnailGenerator:
         line_heights = [bb[3] - bb[1] for bb in line_bboxes]
         line_spacing = 12
 
-        # Position text in the lower portion (~75-85% down)
+        # Position text in the lower portion (~65-75% down)
         total_text_height = sum(line_heights) + line_spacing * max(len(lines) - 1, 0)
-        y_center = int(_THUMBNAIL_HEIGHT * 0.80)
+        y_center = int(_THUMBNAIL_HEIGHT * 0.72)
         y_start = y_center - total_text_height // 2
         y_cursor = y_start
 
