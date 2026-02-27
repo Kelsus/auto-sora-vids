@@ -198,6 +198,7 @@ class PipelineConfig(BaseModel):
     veo_characters_bucket: Optional[str] = None
     veo_character_images: list[Path] = Field(default_factory=list)
     veo_voice_description: Optional[str] = None
+    veo_silent_character: bool = False
     veo_presenter_description: Optional[str] = None
     veo_character_prompt_prefix: Optional[str] = None
     # Gemini Image configuration (for chart composition)
@@ -375,6 +376,7 @@ class PipelineOrchestrator:
                 character_prompt_prefix=config.veo_character_prompt_prefix,
                 presenter_description=config.veo_presenter_description,
                 voice_description=config.veo_voice_description,
+                silent_character=config.veo_silent_character,
             )
         else:
             raise ValueError(f"Unsupported media_provider '{config.media_provider}'")
@@ -1996,7 +1998,7 @@ class PipelineOrchestrator:
                 alignment_path=alignment_path,
                 alignment_payload=bundle.narration_alignment_payload,
             )
-        elif not prompts_only and not bool(self.config.veo_character_images):
+        elif not prompts_only and (not bool(self.config.veo_character_images) or self.config.veo_silent_character):
             logger.info("🎙️  Preparing narration audio")
             script_text = bundle.script.full_transcript
             voice_id = self.config.narration_voice_id or self.config.voice_id
@@ -2172,7 +2174,7 @@ class PipelineOrchestrator:
             and media_assets
         )
         if should_stitch:
-            is_character_mode = bool(self.config.veo_character_images)
+            is_character_mode = bool(self.config.veo_character_images) and not self.config.veo_silent_character
             voice_track = None if is_character_mode else (narration_asset.audio_path if narration_asset else None)
             # When stitch_only, don't burn captions - let the separate caption generation step handle it
             # This avoids needing system ffmpeg in Docker (uses imageio-ffmpeg bundled binary instead)

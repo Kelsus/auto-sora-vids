@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping
 
-from aivideomaker.article_ingest.model import slug_from_url
+from aivideomaker.article_ingest.model import slug_from_url, slugify
 from common.time_utils import ensure_utc, utc_now
 
 
@@ -25,9 +25,18 @@ class JobRequest:
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "JobRequest":
-        missing = [field for field in ("url",) if not payload.get(field)]
-        if missing:
-            raise ValidationError(f"Missing required fields: {', '.join(missing)}")
+        custom_clips = cls._parse_custom_clips(
+            payload.get("custom_clips") or payload.get("customClips")
+        )
+        url = payload.get("url")
+        if not url:
+            if custom_clips:
+                title = payload.get("title")
+                if not title or not isinstance(title, str) or not title.strip():
+                    raise ValidationError("title is required when using custom_clips without a url")
+                url = f"https://custom.local/{slugify(title.strip())}"
+            else:
+                raise ValidationError("Missing required fields: url")
 
         job_type_raw = payload.get("job_type")
         job_type = str(job_type_raw or "SCHEDULED").upper()
@@ -101,8 +110,14 @@ class JobRequest:
         if article_override:
             metadata["article_override"] = article_override
 
+        if custom_clips:
+            metadata["custom_clips"] = custom_clips
+            title = payload.get("title")
+            if isinstance(title, str) and title.strip():
+                metadata["custom_title"] = title.strip()
+
         return cls(
-            url=str(payload["url"]),
+            url=str(url),
             scheduled_datetime=scheduled,
             job_type=job_type,
             status=status,
@@ -122,6 +137,56 @@ class JobRequest:
     @property
     def job_id(self) -> str:
         return slug_from_url(self.url)
+
+    @staticmethod
+    def _parse_custom_clips(raw: Any) -> list[Dict[str, Any]] | None:
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            raise ValidationError("custom_clips must be a list")
+        if len(raw) == 0:
+            raise ValidationError("custom_clips must not be empty")
+        if len(raw) > 30:
+            raise ValidationError("custom_clips must have at most 30 clips")
+
+        clips: list[Dict[str, Any]] = []
+        for i, item in enumerate(raw):
+            if not isinstance(item, Mapping):
+                raise ValidationError(f"custom_clips[{i}] must be an object")
+
+            visual_prompt = item.get("visual_prompt") or item.get("visualPrompt")
+            if not isinstance(visual_prompt, str) or not visual_prompt.strip():
+                raise ValidationError(f"custom_clips[{i}].visual_prompt must be a non-empty string")
+
+            transcript = item.get("transcript", "")
+            if not isinstance(transcript, str):
+                raise ValidationError(f"custom_clips[{i}].transcript must be a string")
+
+            duration_raw = item.get("duration_sec", item.get("durationSec"))
+            if duration_raw is not None:
+                try:
+                    duration_sec = int(duration_raw)
+                except (TypeError, ValueError):
+                    raise ValidationError(f"custom_clips[{i}].duration_sec must be an integer")
+                if duration_sec < 1 or duration_sec > 16:
+                    raise ValidationError(f"custom_clips[{i}].duration_sec must be between 1 and 16")
+            else:
+                duration_sec = 8
+
+            clip: Dict[str, Any] = {
+                "visual_prompt": visual_prompt.strip(),
+                "transcript": transcript,
+                "duration_sec": duration_sec,
+            }
+
+            audio_prompt = item.get("audio_prompt") or item.get("audioPrompt")
+            if audio_prompt is not None:
+                if not isinstance(audio_prompt, str):
+                    raise ValidationError(f"custom_clips[{i}].audio_prompt must be a string")
+                clip["audio_prompt"] = audio_prompt.strip()
+
+            clips.append(clip)
+        return clips
 
     @staticmethod
     def _parse_article_override(raw: Any) -> Dict[str, Any] | None:

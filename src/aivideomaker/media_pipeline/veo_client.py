@@ -74,6 +74,7 @@ class VeoClient:
         character_prompt_prefix: str | None = None,
         presenter_description: str | None = None,
         voice_description: str | None = None,
+        silent_character: bool = False,
     ) -> None:
         self._asset_dir = Path(asset_dir) if asset_dir is not None else None
         self.api_key = api_key
@@ -95,6 +96,7 @@ class VeoClient:
         self.character_prompt_prefix = character_prompt_prefix
         self.presenter_description = presenter_description
         self.voice_description = voice_description
+        self.silent_character = silent_character
         self._reference_images: list[dict[str, Any]] | None = None
         if self.character_images:
             self._reference_images = self._prepare_reference_images(self.character_images)
@@ -228,7 +230,7 @@ class VeoClient:
         return 8
 
     def _compose_prompt(self, prompt: MediaPrompt) -> str:
-        if self._reference_images:
+        if self._reference_images and not self.silent_character:
             segments: list[str] = []
             # Character identity block — tells Veo what the character is so it
             # doesn't drift from the reference images (e.g. adding human features

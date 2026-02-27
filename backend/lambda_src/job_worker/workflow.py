@@ -12,8 +12,12 @@ from types import SimpleNamespace
 
 from imageio_ffmpeg import get_ffmpeg_exe
 
+from aivideomaker.article_ingest.model import ArticleBundle, ArticleDocument, ArticleMetadata, slug_from_url
 from aivideomaker.captions.ass_builder import write_karaoke_ass
+from aivideomaker.chunker.model import Chunk, ChunkPlan
 from aivideomaker.orchestrator import PipelineBundle
+from aivideomaker.prompt_builder.model import MediaPrompt, MediaPromptBundle
+from aivideomaker.script_engine.model import Beat, ScriptPlan
 from aivideomaker.script_engine.reviewer import ScriptReviewDecision
 from aivideomaker.media_pipeline.sora_client import SoraClient, SoraJobError
 
@@ -77,7 +81,16 @@ class PipelineWorkflow:
         if article_override_entry is not None and not isinstance(article_override_entry, Mapping):
             article_override_entry = None
 
-        if resume_key:
+        custom_clips = metadata_payload.get("custom_clips")
+        if custom_clips and not resume_key:
+            if "pause_after_prompts" not in (metadata.pipeline_config or {}):
+                pipeline_overrides["pause_after_prompts"] = False
+            custom_title = metadata_payload.get("custom_title") or "Custom Video"
+            bundle = self._build_custom_prompt_bundle(
+                custom_clips, custom_title, metadata.article_url, pipeline_overrides
+            )
+            clip_ids = self._collect_clip_ids(bundle)
+        elif resume_key:
             target_bundle_key = bundle_key_override or self._settings.bundle_key(metadata.job_id)
             bundle = self._bundle_store.load(target_bundle_key)
             if script_override_entry:
@@ -178,6 +191,108 @@ class PipelineWorkflow:
         )
         logger.info("Prepared prompts for job %s (%d clips)", job_id, len(clip_ids))
         return context
+
+    @staticmethod
+    def _build_custom_prompt_bundle(
+        custom_clips: List[Dict[str, Any]],
+        title: str,
+        article_url: str,
+        pipeline_overrides: Dict[str, Any],
+    ) -> PipelineBundle:
+        """Build a PipelineBundle directly from user-provided clip definitions,
+        bypassing article ingestion and script generation."""
+        slug = slug_from_url(article_url)
+        full_text = "\n\n".join(c.get("transcript", "") for c in custom_clips)
+
+        article_doc = ArticleDocument(
+            metadata=ArticleMetadata(
+                url=article_url,
+                title=title,
+                slug=slug,
+            ),
+            text=full_text or "(custom prompt mode)",
+        )
+        article_bundle = ArticleBundle.from_document(article_doc)
+
+        negative_prompt = pipeline_overrides.get(
+            "negative_prompt",
+            "no subtitles, no captions, no on-screen text, no watermark",
+        )
+
+        beats: List[Beat] = []
+        chunks: List[Chunk] = []
+        media_prompts: List[MediaPrompt] = []
+        cursor = 0.0
+
+        for i, clip in enumerate(custom_clips):
+            clip_id = f"custom-{i + 1:02d}"
+            transcript = clip.get("transcript", "")
+            duration = float(clip.get("duration_sec", 8))
+            visual_prompt = clip["visual_prompt"]
+            audio_prompt = clip.get("audio_prompt", "ambient background score")
+
+            beats.append(Beat(
+                id=clip_id,
+                purpose="custom",
+                transcript=transcript,
+                suspense_level=3,
+                estimated_duration_sec=duration,
+                audio_mood=audio_prompt,
+            ))
+
+            chunks.append(Chunk(
+                id=clip_id,
+                beat_id=clip_id,
+                transcript=transcript,
+                estimated_duration_sec=duration,
+                start_time_sec=cursor,
+                end_time_sec=cursor + duration,
+            ))
+
+            media_prompts.append(MediaPrompt(
+                chunk_id=clip_id,
+                transcript=transcript,
+                visual_prompt=visual_prompt,
+                audio_prompt=audio_prompt,
+                duration_sec=duration,
+                negative_prompt=negative_prompt,
+                render_mode="sora_clip",
+            ))
+
+            cursor += duration
+
+        script = ScriptPlan(
+            beats=beats,
+            premise="",
+            controversy_summary="",
+            withheld_context="",
+            final_reveal="",
+        )
+
+        chunk_plan = ChunkPlan(chunks=chunks, total_duration_sec=cursor)
+
+        prompts_bundle = MediaPromptBundle(
+            article_slug=slug,
+            media_prompts=media_prompts,
+        )
+
+        bundle = PipelineBundle(
+            article=article_bundle,
+            script=script,
+            chunks=chunk_plan,
+            prompts=prompts_bundle,
+            sora_assets=[],
+            voice_transcript=None,
+            final_video=None,
+            script_greenlit=True,
+        )
+
+        logger.info(
+            "Built custom prompt bundle with %d clip(s), total %.1fs",
+            len(custom_clips),
+            cursor,
+        )
+        return bundle
 
     @staticmethod
     def _collect_clip_ids(bundle) -> List[str]:
