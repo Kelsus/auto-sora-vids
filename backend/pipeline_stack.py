@@ -202,7 +202,7 @@ class VideoAutomationStack(Stack):
             rest_api_name="Video Automation Jobs",
             api_key_source_type=apigateway.ApiKeySourceType.HEADER,
             default_cors_preflight_options=apigateway.CorsOptions(
-                allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+                allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
                 allow_origins=apigateway.Cors.ALL_ORIGINS,
                 allow_headers=["*"],
             ),
@@ -560,8 +560,46 @@ class VideoAutomationStack(Stack):
             encryption=s3.BucketEncryption.S3_MANAGED,
             removal_policy=RemovalPolicy.RETAIN,
         )
+        characters_bucket.add_cors_rule(
+            allowed_methods=[s3.HttpMethods.GET, s3.HttpMethods.HEAD, s3.HttpMethods.PUT],
+            allowed_origins=["*"],
+            allowed_headers=["*"],
+            exposed_headers=["ETag"],
+            max_age=3600,
+        )
         characters_bucket.grant_read(worker_lambda)
         worker_lambda.add_environment("VEO_CHARACTERS_BUCKET", characters_bucket.bucket_name)
+
+        character_manager_lambda = lambda_python.PythonFunction(
+            self,
+            "CharacterManagerLambda",
+            entry=str(lambda_src),
+            index="character_manager/handler.py",
+            handler="handler",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={
+                "CHARACTERS_BUCKET": characters_bucket.bucket_name,
+                "STAGE": stage,
+            },
+            layers=[shared_layer],
+            bundling=function_bundling,
+        )
+        characters_bucket.grant_read_write(character_manager_lambda)
+
+        characters_resource = api.root.add_resource("characters")
+        char_integration = apigateway.LambdaIntegration(character_manager_lambda)
+        characters_resource.add_method("GET", char_integration, api_key_required=True)
+        characters_resource.add_method("POST", char_integration, api_key_required=True)
+
+        character_id_resource = characters_resource.add_resource("{characterId}")
+        character_id_resource.add_method("GET", char_integration, api_key_required=True)
+        character_id_resource.add_method("PUT", char_integration, api_key_required=True)
+        character_id_resource.add_method("DELETE", char_integration, api_key_required=True)
+
+        char_upload_urls_resource = character_id_resource.add_resource("upload-urls")
+        char_upload_urls_resource.add_method("POST", char_integration, api_key_required=True)
 
         for env_var, parameter, name in secret_parameters:
             worker_lambda.add_environment(env_var, name)
