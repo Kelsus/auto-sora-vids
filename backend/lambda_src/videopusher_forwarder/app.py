@@ -6,6 +6,7 @@ import mimetypes
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import unquote_plus
 
 import boto3
 
@@ -263,9 +264,17 @@ class VideoPusherForwarder:
 
     @staticmethod
     def _extract_s3_location(record: Dict[str, Any]) -> tuple[str | None, str | None]:
-        """Extract bucket name and key from S3 event record."""
+        """Extract bucket name and key from S3 event record.
+
+        S3 event notifications URL-encode the object key (e.g. spaces become
+        ``+``, non-ASCII bytes become ``%XX``), so we must decode it before
+        using it in subsequent S3 API calls.
+        """
         s3_info = record.get("s3", {})
+        key = s3_info.get("object", {}).get("key")
+        if key is not None:
+            key = unquote_plus(key)
         return (
             s3_info.get("bucket", {}).get("name"),
-            s3_info.get("object", {}).get("key"),
+            key,
         )
