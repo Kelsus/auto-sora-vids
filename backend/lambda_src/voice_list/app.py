@@ -81,8 +81,11 @@ class VoiceListApplication:
         if event.get("httpMethod") == "OPTIONS":  # CORS preflight
             return cors_preflight_response()
 
+        query_params = event.get("queryStringParameters") or {}
+        search = (query_params.get("search") or "").strip() or None
+
         try:
-            voices = self._load_filtered_voices()
+            voices = self._load_filtered_voices(search=search)
             if not voices:
                 voices = self._load_fallback_voices()
         except VoiceListPermissionError:
@@ -98,61 +101,71 @@ class VoiceListApplication:
 
         return ok({"voices": voices})
 
-    def _load_filtered_voices(self) -> List[Dict[str, Any]]:
+    def _load_filtered_voices(self, *, search: Optional[str] = None) -> List[Dict[str, Any]]:
         try:
-            raw_voices = self._fetch_voices()
+            raw_voices = self._fetch_voices(search=search)
         except HTTPError as exc:
             if getattr(exc, "code", None) in {401, 403}:
                 raise VoiceListPermissionError("ElevenLabs API rejected credentials") from exc
             raise
         logger.info("Fetched %s voices from ElevenLabs", len(raw_voices))
 
-        if SHUFFLE_VOICES:
+        # When searching, skip type filters — the user is explicitly looking for something
+        skip_type_filter = bool(search)
+
+        if SHUFFLE_VOICES and not search:
             raw_voices = list(raw_voices)
             random.shuffle(raw_voices)
         filtered: List[Dict[str, Any]] = []
         for entry in raw_voices:
             if not isinstance(entry, dict):
                 continue
-            if not self._matches_filters(entry):
+            if not skip_type_filter and not self._matches_filters(entry):
                 continue
             mapped = self._map_voice(entry)
             if mapped:
                 filtered.append(mapped)
             if len(filtered) >= MAX_RESULTS:
                 break
-        if filtered and len(filtered) >= MIN_RESULTS:
+        if filtered and (search or len(filtered) >= MIN_RESULTS):
             logger.info("Returning %s filtered voices", len(filtered))
             return filtered
 
-        logger.warning(
-            "Filtered voice list produced %s entries (<%s); using top results",
-            len(filtered),
-            MIN_RESULTS,
-        )
-        fallback = self._top_results(raw_voices)
-        if fallback:
-            return fallback
+        if not search:
+            logger.warning(
+                "Filtered voice list produced %s entries (<%s); using top results",
+                len(filtered),
+                MIN_RESULTS,
+            )
+            fallback = self._top_results(raw_voices)
+            if fallback:
+                return fallback
         logger.warning("Unable to map remote voices; falling back to static defaults")
         return []
 
-    def _fetch_voices(self) -> List[Dict[str, Any]]:
+    def _fetch_voices(self, *, search: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch voices from ElevenLabs shared voice library with pagination.
 
         Uses random page offset for variety, then collects PAGES_TO_FETCH pages.
-        The shared-voices endpoint uses page numbers (not tokens) for pagination.
+        When *search* is provided, starts at page 0 and fetches more pages to
+        surface the best matches from the full ElevenLabs library.
         """
         api_key = self._resolve_api_key()
 
-        # Determine starting page (random offset for variety)
-        # The shared-voices library has many pages, randomize starting point
-        start_page = PAGES_TO_SKIP if PAGES_TO_SKIP > 0 else random.randint(0, 50)
-        logger.info("Pagination: starting at page %d, fetching %d pages", start_page, PAGES_TO_FETCH)
+        if search:
+            # Searching: start at page 0, fetch more pages for better coverage
+            start_page = 0
+            pages_to_fetch = 3
+        else:
+            start_page = PAGES_TO_SKIP if PAGES_TO_SKIP > 0 else random.randint(0, 50)
+            pages_to_fetch = PAGES_TO_FETCH
+        logger.info("Pagination: starting at page %d, fetching %d pages (search=%s)",
+                    start_page, pages_to_fetch, search)
 
         all_voices: List[Dict[str, Any]] = []
         pages_collected = 0
 
-        for page_offset in range(PAGES_TO_FETCH):
+        for page_offset in range(pages_to_fetch):
             current_page = start_page + page_offset
 
             # Build URL with pagination and language filter
@@ -161,6 +174,8 @@ class VoiceListApplication:
                 "page": current_page,
                 "language": "en",  # Filter for English voices at the API level
             }
+            if search:
+                params["search"] = search
 
             url = f"{VOICE_API_URL}?{urlencode(params)}"
             request = Request(url, headers={"xi-api-key": api_key})
